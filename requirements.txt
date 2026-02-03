@@ -1,0 +1,5 @@
+faster-whisper>=1.0.0
+pynput>=1.7.6
+pyaudio>=0.2.14
+numpy>=1.24.0
+PyGObject>=3.42.0
