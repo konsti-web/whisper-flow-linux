@@ -52,8 +52,11 @@ from faster_whisper import WhisperModel
 # GTK und AppIndicator für Tray Icon
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
-from gi.repository import Gtk, GLib, AppIndicator3
+from gi.repository import Gtk, Gdk, GLib, AppIndicator3
+import cairo
+import math
 
 # Konfigurationspfade
 CONFIG_DIR = Path.home() / ".config" / "whisper-flow"
@@ -146,6 +149,136 @@ class Config:
         self.save()
 
 
+class AudioLevelOverlay:
+    """Balken-Anzeige (VU-Meter) als Aufnahme-Overlay mit Audio-Level."""
+
+    NUM_BARS = 7
+    BAR_WIDTH = 10
+    BAR_GAP = 5
+    BAR_MAX_HEIGHT = 60
+    BAR_MIN_HEIGHT = 8
+    PADDING = 12
+    CORNER_RADIUS = 10
+
+    def __init__(self):
+        self._level = 0.0
+        self._bar_heights = [0.0] * self.NUM_BARS
+        self._timer_id = None
+
+        self._width = self.PADDING * 2 + self.NUM_BARS * self.BAR_WIDTH + (self.NUM_BARS - 1) * self.BAR_GAP
+        self._height = self.PADDING * 2 + self.BAR_MAX_HEIGHT
+
+        self._window = Gtk.Window(type=Gtk.WindowType.POPUP)
+        self._window.set_app_paintable(True)
+        self._window.set_decorated(False)
+        self._window.set_keep_above(True)
+        self._window.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
+        self._window.set_accept_focus(False)
+        self._window.set_default_size(self._width, self._height)
+
+        screen = self._window.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual:
+            self._window.set_visual(visual)
+
+        self._window.connect("draw", self._on_draw)
+
+        # Position: unten mittig auf dem primären Monitor
+        display = Gdk.Display.get_default()
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+        geom = monitor.get_geometry()
+        x = geom.x + (geom.width - self._width) // 2
+        y = geom.y + geom.height - self._height - 60
+        self._window.move(x, y)
+
+    def _make_click_through(self):
+        """Setzt eine leere Input-Region, damit Klicks durchgehen."""
+        gdk_window = self._window.get_window()
+        if gdk_window:
+            region = cairo.Region(cairo.RectangleInt(0, 0, 0, 0))
+            gdk_window.input_shape_combine_region(region, 0, 0)
+
+    def show_overlay(self):
+        """Zeigt das Overlay und startet die Animation."""
+        self._bar_heights = [0.0] * self.NUM_BARS
+        self._level = 0.0
+        self._window.show_all()
+        self._make_click_through()
+        if self._timer_id is None:
+            self._timer_id = GLib.timeout_add(50, self._tick)  # 20fps
+
+    def hide_overlay(self):
+        """Versteckt das Overlay und stoppt die Animation."""
+        if self._timer_id is not None:
+            GLib.source_remove(self._timer_id)
+            self._timer_id = None
+        self._window.hide()
+        self._bar_heights = [0.0] * self.NUM_BARS
+        self._level = 0.0
+
+    def set_level(self, level):
+        """Setzt den aktuellen Audio-Level (0.0 - 1.0)."""
+        self._level = max(0.0, min(1.0, level))
+
+    def _tick(self):
+        """Animation-Tick: Balken-Höhen smoothen und Neuzeichnung."""
+        level = self._level
+        # Ziel-Höhen pro Balken: mittlere Balken höher (Symmetrie)
+        targets = []
+        for i in range(self.NUM_BARS):
+            # Parabel-Gewichtung: Mitte am höchsten
+            dist = abs(i - (self.NUM_BARS - 1) / 2.0) / ((self.NUM_BARS - 1) / 2.0)
+            weight = 1.0 - 0.5 * dist * dist
+            targets.append(level * weight)
+        # Smoothing pro Balken
+        for i in range(self.NUM_BARS):
+            if targets[i] > self._bar_heights[i]:
+                self._bar_heights[i] += (targets[i] - self._bar_heights[i]) * 0.5
+            else:
+                self._bar_heights[i] += (targets[i] - self._bar_heights[i]) * 0.15
+        self._window.queue_draw()
+        return True
+
+    def _draw_rounded_rect(self, cr, x, y, w, h, r):
+        """Zeichnet ein abgerundetes Rechteck. r wird auf max h/2 begrenzt."""
+        r = min(r, h / 2.0, w / 2.0)
+        cr.new_path()
+        cr.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
+        cr.arc(x + w - r, y + r, r, 1.5 * math.pi, 2 * math.pi)
+        cr.arc(x + w - r, y + h - r, r, 0, 0.5 * math.pi)
+        cr.arc(x + r, y + h - r, r, 0.5 * math.pi, math.pi)
+        cr.close_path()
+
+    def _on_draw(self, widget, cr):
+        """Cairo-Zeichnung: Hintergrund-Panel mit vertikalen Balken."""
+        # Transparenter Hintergrund
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+
+        base_y = self._height - self.PADDING
+
+        for i in range(self.NUM_BARS):
+            h = self.BAR_MIN_HEIGHT + self._bar_heights[i] * (self.BAR_MAX_HEIGHT - self.BAR_MIN_HEIGHT)
+            x = self.PADDING + i * (self.BAR_WIDTH + self.BAR_GAP)
+            y = base_y - h
+
+            # Abgerundeter Balken
+            self._draw_rounded_rect(cr, x, y, self.BAR_WIDTH, h, self.BAR_WIDTH / 2.0)
+
+            # Farb-Gradient: grün → gelb → rot je nach Höhe
+            frac = self._bar_heights[i]
+            if frac < 0.5:
+                red = frac * 2
+                green = 0.8
+            else:
+                red = 1.0
+                green = 0.8 * max(0.0, 1.0 - (frac - 0.5) * 2)
+            cr.set_source_rgba(red, green, 0.1, 0.9)
+            cr.fill()
+
+
 class WhisperFlow:
     def __init__(self, config):
         self.config = config
@@ -170,6 +303,9 @@ class WhisperFlow:
         # Tray Icon
         self.indicator = None
         self.status_item = None
+
+        # Audio-Level Overlay
+        self.audio_overlay = None
 
     def get_input_device_index(self):
         """Gibt den Index des konfigurierten Eingabegeräts zurück."""
@@ -240,9 +376,9 @@ class WhisperFlow:
         self.audio_thread = threading.Thread(target=self._record_audio)
         self.audio_thread.start()
 
+        GLib.idle_add(self.audio_overlay.show_overlay)
         safe_print("[AUFNAHME] Spreche jetzt...")
         self._update_status("Aufnahme...")
-        self._show_notification("Aufnahme gestartet", "Spreche jetzt...")
 
     def _record_audio(self):
         """Nimmt Audio auf in separatem Thread."""
@@ -250,6 +386,11 @@ class WhisperFlow:
             try:
                 data = self.stream.read(CHUNK_SIZE, exception_on_overflow=False)
                 self.audio_frames.append(data)
+                # RMS-Level berechnen und an Overlay senden
+                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                rms = np.sqrt(np.mean(samples ** 2))
+                level = min(1.0, rms / 8000.0)
+                GLib.idle_add(self.audio_overlay.set_level, level)
             except Exception as e:
                 safe_print("Audio-Fehler: {}".format(e))
                 break
@@ -260,6 +401,7 @@ class WhisperFlow:
             return
 
         self.recording = False
+        GLib.idle_add(self.audio_overlay.hide_overlay)
         self._update_status("Verarbeite...")
 
         if self.audio_thread:
@@ -279,7 +421,6 @@ class WhisperFlow:
             return
 
         safe_print("[VERARBEITE] Transkribiere...")
-        self._show_notification("Verarbeite...", "Transkribiere Audio")
 
         try:
             # Audio-Daten als numpy-Array konvertieren
@@ -317,7 +458,6 @@ class WhisperFlow:
                 self._show_notification("Transkribiert", display_text)
             else:
                 safe_print("[LEER] Keine Sprache erkannt")
-                self._show_notification("Keine Sprache erkannt", "Versuche es erneut")
 
         except Exception as e:
             safe_print("[FEHLER] Transkription fehlgeschlagen: {}".format(e))
@@ -457,6 +597,8 @@ class WhisperFlow:
     def quit(self, widget=None):
         """Beendet die Anwendung."""
         safe_print("\nBeende Whisper Flow...")
+        if self.audio_overlay:
+            self.audio_overlay.hide_overlay()
         if self.recording:
             self.recording = False
         if self.listener:
@@ -511,6 +653,7 @@ class WhisperFlow:
     def run(self):
         """Startet die Anwendung."""
         self.setup_tray()
+        self.audio_overlay = AudioLevelOverlay()
 
         model_thread = threading.Thread(target=self.load_model)
         model_thread.daemon = True
