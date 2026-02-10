@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
     "model_size": "large-v3-turbo",
     "language": None,
     "hold_threshold": 0.3,
-    "trigger_key": "ctrl",
+    "trigger_key": "altgr",
     "autostart": True,
     "input_device": None  # None = Standard-Gerät
 }
@@ -158,12 +158,14 @@ class WhisperFlow:
         self.model = None
         self.model_loaded = False
         self.listener = None
+        self.recording_rate = SAMPLE_RATE  # Tatsächliche Aufnahme-Rate
 
         # Hold-to-record detection
         self.key_pressed = False
         self.key_press_time = 0
         self.hold_timer = None
         self.recording_started_by_hold = False
+        self.alt_pressed = False
 
         # Tray Icon
         self.indicator = None
@@ -202,6 +204,7 @@ class WhisperFlow:
         device_index = self.get_input_device_index()
 
         try:
+            self.recording_rate = SAMPLE_RATE
             self.stream = self.pyaudio.open(
                 format=pyaudio.paInt16,
                 channels=CHANNELS,
@@ -210,11 +213,29 @@ class WhisperFlow:
                 input_device_index=device_index,
                 frames_per_buffer=CHUNK_SIZE
             )
-        except Exception as e:
-            safe_print("[FEHLER] Konnte Audio-Stream nicht oeffnen: {}".format(e))
-            self.recording = False
-            self._update_status("Fehler: Audio")
-            return
+        except Exception:
+            # Fallback: Native Sample Rate des Geräts verwenden
+            try:
+                if device_index is not None:
+                    dev_info = self.pyaudio.get_device_info_by_index(device_index)
+                else:
+                    dev_info = self.pyaudio.get_default_input_device_info()
+                native_rate = int(dev_info.get('defaultSampleRate', 48000))
+                safe_print("[INFO] 16kHz nicht unterstuetzt, verwende {}Hz".format(native_rate))
+                self.recording_rate = native_rate
+                self.stream = self.pyaudio.open(
+                    format=pyaudio.paInt16,
+                    channels=CHANNELS,
+                    rate=native_rate,
+                    input=True,
+                    input_device_index=device_index,
+                    frames_per_buffer=CHUNK_SIZE
+                )
+            except Exception as e:
+                safe_print("[FEHLER] Konnte Audio-Stream nicht oeffnen: {}".format(e))
+                self.recording = False
+                self._update_status("Fehler: Audio")
+                return
 
         self.audio_thread = threading.Thread(target=self._record_audio)
         self.audio_thread.start()
@@ -264,6 +285,13 @@ class WhisperFlow:
             # Audio-Daten als numpy-Array konvertieren
             audio_data = b''.join(self.audio_frames)
             audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+
+            # Resample auf 16kHz falls nötig
+            if self.recording_rate != SAMPLE_RATE:
+                duration = len(audio_array) / self.recording_rate
+                target_length = int(duration * SAMPLE_RATE)
+                indices = np.linspace(0, len(audio_array) - 1, target_length)
+                audio_array = np.interp(indices, np.arange(len(audio_array)), audio_array)
 
             # Transkribieren - numpy array umgeht PyAV Encoding-Problem
             segments, info = self.model.transcribe(
@@ -352,9 +380,10 @@ class WhisperFlow:
         key_map = {
             "ctrl": (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r),
             "alt": (keyboard.Key.alt_l, keyboard.Key.alt_r),
+            "altgr": (keyboard.Key.alt_gr, keyboard.KeyCode.from_vk(65027)),
             "super": (keyboard.Key.cmd_l, keyboard.Key.cmd_r),
         }
-        return key_map.get(key_name, key_map["ctrl"])
+        return key_map.get(key_name, key_map["altgr"])
 
     def _start_recording_after_hold(self):
         """Startet Aufnahme nach Hold-Threshold."""
@@ -365,31 +394,52 @@ class WhisperFlow:
     def on_press(self, key):
         """Handler für Tastendruck."""
         try:
-            trigger_keys = self._get_trigger_key()
-            if key in trigger_keys:
-                if not self.key_pressed:
-                    self.key_pressed = True
-                    self.key_press_time = time.time()
+            trigger = self.config.get("trigger_key")
+            is_trigger = False
 
-                    self.hold_timer = threading.Timer(
-                        self.config.get("hold_threshold"),
-                        self._start_recording_after_hold
-                    )
-                    self.hold_timer.start()
+            if trigger == "alt+space":
+                if key in (keyboard.Key.alt_l, keyboard.Key.alt_r):
+                    self.alt_pressed = True
+                elif key == keyboard.Key.space and self.alt_pressed:
+                    is_trigger = True
+            else:
+                trigger_keys = self._get_trigger_key()
+                if key in trigger_keys:
+                    is_trigger = True
+
+            if is_trigger and not self.key_pressed:
+                self.key_pressed = True
+                self.key_press_time = time.time()
+                self.hold_timer = threading.Timer(
+                    self.config.get("hold_threshold"),
+                    self._start_recording_after_hold
+                )
+                self.hold_timer.start()
         except Exception:
             pass
 
     def on_release(self, key):
         """Handler für Tastenfreigabe."""
         try:
-            trigger_keys = self._get_trigger_key()
-            if key in trigger_keys:
-                self.key_pressed = False
+            trigger = self.config.get("trigger_key")
+            is_trigger_release = False
 
+            if trigger == "alt+space":
+                if key in (keyboard.Key.alt_l, keyboard.Key.alt_r):
+                    self.alt_pressed = False
+                    is_trigger_release = True
+                elif key == keyboard.Key.space:
+                    is_trigger_release = True
+            else:
+                trigger_keys = self._get_trigger_key()
+                if key in trigger_keys:
+                    is_trigger_release = True
+
+            if is_trigger_release:
+                self.key_pressed = False
                 if self.hold_timer:
                     self.hold_timer.cancel()
                     self.hold_timer = None
-
                 if self.recording and self.recording_started_by_hold:
                     self.recording_started_by_hold = False
                     self.stop_recording()
@@ -475,9 +525,11 @@ class WhisperFlow:
         signal.signal(signal.SIGINT, lambda s, f: self.quit())
         signal.signal(signal.SIGTERM, lambda s, f: self.quit())
 
-        trigger = self.config.get('trigger_key').upper()
+        trigger = self.config.get('trigger_key')
+        trigger_names = {"alt+space": "ALT + LEERTASTE", "altgr": "ALTGR"}
+        trigger_display = trigger_names.get(trigger, trigger.upper())
         safe_print("[BEREIT] Whisper Flow gestartet")
-        safe_print("         {} gedrueckt halten zum Diktieren".format(trigger))
+        safe_print("         {} gedrueckt halten zum Diktieren".format(trigger_display))
         safe_print("         Tray Icon fuer weitere Optionen\n")
 
         Gtk.main()
@@ -550,6 +602,8 @@ class SettingsDialog(Gtk.Dialog):
         key_box.pack_start(key_label, True, True, 0)
 
         self.key_combo = Gtk.ComboBoxText()
+        self.key_combo.append("altgr", "AltGr")
+        self.key_combo.append("alt+space", "Alt + Leertaste")
         self.key_combo.append("ctrl", "Strg (Ctrl)")
         self.key_combo.append("alt", "Alt")
         self.key_combo.append("super", "Super (Windows-Taste)")
