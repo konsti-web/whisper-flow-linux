@@ -17,13 +17,11 @@ fi
 
 source venv/bin/activate
 
-# CUDA Bibliotheken Pfad setzen (absolute Pfade)
-CUDA_LIBS="$SCRIPT_DIR/venv/lib/python3.12/site-packages/nvidia"
-export LD_LIBRARY_PATH="$CUDA_LIBS/cublas/lib:$CUDA_LIBS/cudnn/lib:$LD_LIBRARY_PATH"
-
-# Debug: Zeige Pfade
-echo "SCRIPT_DIR: $SCRIPT_DIR"
-echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-echo ""
+# CUDA Bibliotheken Pfad setzen (Python-Version automatisch erkennen)
+PYTHON_VERSION=$(python -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')")
+CUDA_LIBS="$SCRIPT_DIR/venv/lib/$PYTHON_VERSION/site-packages/nvidia"
+if [ -d "$CUDA_LIBS" ]; then
+    export LD_LIBRARY_PATH="$CUDA_LIBS/cublas/lib:$CUDA_LIBS/cudnn/lib:$LD_LIBRARY_PATH"
+fi
 
 exec python whisper_flow.py "$@"

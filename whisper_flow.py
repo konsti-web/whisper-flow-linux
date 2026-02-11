@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Whisper Flow für Linux
-Strg gedrückt halten zum Starten/Stoppen der Aufnahme.
-Transkribiert mit faster-whisper und fügt Text ein.
-Mit System Tray Icon für Kontrolle und Einstellungen.
+Whisper Flow fuer Linux
+Trigger-Taste gedrueckt halten oder doppelt tippen zum Diktieren.
+Transkribiert mit faster-whisper und fuegt Text an der Cursor-Position ein.
+Mit System Tray Icon fuer Kontrolle und Einstellungen.
 """
 
-from __future__ import print_function
 import subprocess
 import threading
 import time
@@ -16,6 +15,7 @@ import sys
 import json
 import signal
 import locale
+import traceback
 from pathlib import Path
 
 # WICHTIG: C.UTF-8 Locale verwenden - PyAV/FFmpeg hat Probleme mit de_DE
@@ -484,6 +484,10 @@ class WhisperFlow:
         if self.recording or self.paused:
             return
 
+        if not self.model_loaded:
+            safe_print("[WARNUNG] Model wird noch geladen...")
+            return
+
         self.recording = True
         self.audio_frames = []
 
@@ -611,7 +615,6 @@ class WhisperFlow:
 
         except Exception as e:
             safe_print("[FEHLER] Transkription fehlgeschlagen: {}".format(e))
-            import traceback
             traceback.print_exc()
 
         finally:
