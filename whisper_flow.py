@@ -44,7 +44,7 @@ check_import('pyaudio', 'pyaudio')
 check_import('numpy', 'numpy')
 check_import('faster_whisper', 'faster-whisper')
 
-from pynput import keyboard
+from pynput import keyboard, mouse
 import pyaudio
 import numpy as np
 from faster_whisper import WhisperModel
@@ -69,7 +69,7 @@ DEFAULT_CONFIG = {
     "model_size": "large-v3-turbo",
     "language": None,
     "hold_threshold": 0.3,
-    "trigger_key": "altgr",
+    "trigger_keys": ["key:alt_gr", "key:vk:65027"],
     "autostart": True,
     "input_device": None  # None = Standard-Gerät
 }
@@ -87,6 +87,125 @@ def safe_print(text):
     except UnicodeEncodeError:
         # Fallback: Ersetze nicht-ASCII Zeichen
         print(text.encode('ascii', 'replace').decode('ascii'), flush=True)
+
+
+class TriggerSerializer:
+    """Serialisiert und deserialisiert Trigger-Tasten."""
+
+    # Mapping von pynput Key-Namen zu lesbaren Display-Namen
+    _KEY_DISPLAY_NAMES = {
+        "alt_gr": "AltGr",
+        "alt_l": "Alt Links",
+        "alt_r": "Alt Rechts",
+        "ctrl_l": "Strg Links",
+        "ctrl_r": "Strg Rechts",
+        "cmd_l": "Super Links",
+        "cmd_r": "Super Rechts",
+        "shift_l": "Shift Links",
+        "shift_r": "Shift Rechts",
+        "space": "Leertaste",
+        "tab": "Tab",
+        "caps_lock": "Caps Lock",
+        "scroll_lock": "Scroll Lock",
+        "print_screen": "Druck",
+        "pause": "Pause",
+        "insert": "Einfg",
+        "delete": "Entf",
+        "home": "Pos1",
+        "end": "Ende",
+        "page_up": "Bild hoch",
+        "page_down": "Bild runter",
+        "num_lock": "Num Lock",
+        "menu": "Menü",
+    }
+
+    @staticmethod
+    def serialize_keyboard_key(key):
+        """Serialisiert einen pynput keyboard Key zu String."""
+        if isinstance(key, keyboard.Key):
+            return "key:{}".format(key.name)
+        elif isinstance(key, keyboard.KeyCode):
+            if key.vk is not None:
+                return "key:vk:{}".format(key.vk)
+            elif key.char is not None:
+                return "key:char:{}".format(key.char)
+        return None
+
+    @staticmethod
+    def serialize_mouse_button(button):
+        """Serialisiert einen pynput mouse Button zu String."""
+        # pynput mouse.Button hat .name wie 'left', 'right', 'middle', 'button8' etc.
+        # Für Xorg-Seitentasten: button8, button9, etc.
+        return "mouse:{}".format(button.name)
+
+    @staticmethod
+    def deserialize(s):
+        """Deserialisiert String zu (typ, pynput_objekte_tuple).
+
+        Returns:
+            ("keyboard", (key_obj,)) oder
+            ("mouse", (button_obj,)) oder
+            ("combo", "alt+space") oder
+            None bei Fehler
+        """
+        try:
+            if s.startswith("key:vk:"):
+                vk = int(s[7:])
+                return ("keyboard", (keyboard.KeyCode.from_vk(vk),))
+            elif s.startswith("key:char:"):
+                char = s[9:]
+                return ("keyboard", (keyboard.KeyCode.from_char(char),))
+            elif s.startswith("key:"):
+                name = s[4:]
+                try:
+                    return ("keyboard", (keyboard.Key[name],))
+                except KeyError:
+                    safe_print("[WARNUNG] Unbekannter Key: {}".format(name))
+                    return None
+            elif s.startswith("mouse:"):
+                btn_name = s[6:]
+                try:
+                    return ("mouse", (mouse.Button[btn_name],))
+                except KeyError:
+                    safe_print("[WARNUNG] Unbekannter Mouse-Button: {}".format(btn_name))
+                    return None
+            elif s.startswith("combo:"):
+                return ("combo", s[6:])
+        except Exception as e:
+            safe_print("[WARNUNG] Trigger-Deserialisierung fehlgeschlagen: {} - {}".format(s, e))
+        return None
+
+    @classmethod
+    def display_name(cls, s):
+        """Gibt einen menschenlesbaren Namen zurück."""
+        if s.startswith("key:vk:"):
+            vk = s[7:]
+            # Bekannte VK-Codes
+            known_vk = {"65027": "AltGr"}
+            return known_vk.get(vk, "Taste (VK {})".format(vk))
+        elif s.startswith("key:char:"):
+            char = s[9:]
+            return "Taste '{}'".format(char.upper())
+        elif s.startswith("key:"):
+            name = s[4:]
+            return cls._KEY_DISPLAY_NAMES.get(name, name.replace("_", " ").title())
+        elif s.startswith("mouse:"):
+            btn_name = s[6:]
+            if btn_name in ("left", "right", "middle"):
+                names = {"left": "Maus Links", "right": "Maus Rechts", "middle": "Maus Mitte"}
+                return names[btn_name]
+            # button8, button9, etc. -> Seitentaste
+            if btn_name.startswith("button"):
+                num = btn_name[6:]
+                side_num = int(num) - 7  # button8 = Seitentaste 1
+                return "Maus Seitentaste {}".format(side_num)
+            return "Maus {}".format(btn_name)
+        elif s.startswith("combo:"):
+            combo = s[6:]
+            if combo == "alt+space":
+                return "Alt + Leertaste"
+            return combo.upper()
+        return s
 
 
 def get_audio_devices():
@@ -131,6 +250,25 @@ class Config:
                     self.config.update(loaded)
             except Exception as e:
                 safe_print("Warnung: Konnte Konfiguration nicht laden: {}".format(e))
+
+        # Migration: trigger_key (alt) -> trigger_keys (neu)
+        if "trigger_key" in self.config and "trigger_keys" not in self.config:
+            old_key = self.config.pop("trigger_key")
+            migration_map = {
+                "altgr": ["key:alt_gr", "key:vk:65027"],
+                "ctrl": ["key:ctrl_l", "key:ctrl_r"],
+                "alt": ["key:alt_l", "key:alt_r"],
+                "super": ["key:cmd_l", "key:cmd_r"],
+                "alt+space": ["combo:alt+space"],
+            }
+            self.config["trigger_keys"] = migration_map.get(old_key, ["key:alt_gr", "key:vk:65027"])
+            safe_print("[INFO] Config migriert: trigger_key='{}' -> trigger_keys={}".format(
+                old_key, self.config["trigger_keys"]))
+            self.save()
+        elif "trigger_key" in self.config and "trigger_keys" in self.config:
+            # Alten Key entfernen falls beide vorhanden
+            self.config.pop("trigger_key", None)
+            self.save()
 
     def save(self):
         """Speichert Konfiguration in Datei."""
@@ -291,7 +429,13 @@ class WhisperFlow:
         self.model = None
         self.model_loaded = False
         self.listener = None
+        self.mouse_listener = None
         self.recording_rate = SAMPLE_RATE  # Tatsächliche Aufnahme-Rate
+
+        # Trigger-Matcher Sets
+        self._keyboard_triggers = set()
+        self._mouse_triggers = set()
+        self._has_alt_space_combo = False
 
         # Hold-to-record detection
         self.key_pressed = False
@@ -514,16 +658,29 @@ class WhisperFlow:
         if self.status_item:
             GLib.idle_add(self.status_item.set_label, "Status: {}".format(status))
 
-    def _get_trigger_key(self):
-        """Gibt die konfigurierte Trigger-Taste zurück."""
-        key_name = self.config.get("trigger_key")
-        key_map = {
-            "ctrl": (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r),
-            "alt": (keyboard.Key.alt_l, keyboard.Key.alt_r),
-            "altgr": (keyboard.Key.alt_gr, keyboard.KeyCode.from_vk(65027)),
-            "super": (keyboard.Key.cmd_l, keyboard.Key.cmd_r),
-        }
-        return key_map.get(key_name, key_map["altgr"])
+    def _build_trigger_matchers(self):
+        """Baut aus config trigger_keys die Matcher-Sets."""
+        self._keyboard_triggers = set()
+        self._mouse_triggers = set()
+        self._has_alt_space_combo = False
+
+        trigger_keys = self.config.get("trigger_keys")
+        if not trigger_keys:
+            trigger_keys = DEFAULT_CONFIG["trigger_keys"]
+
+        for s in trigger_keys:
+            result = TriggerSerializer.deserialize(s)
+            if result is None:
+                continue
+            typ, value = result
+            if typ == "keyboard":
+                for obj in value:
+                    self._keyboard_triggers.add(obj)
+            elif typ == "mouse":
+                for obj in value:
+                    self._mouse_triggers.add(obj)
+            elif typ == "combo" and value == "alt+space":
+                self._has_alt_space_combo = True
 
     def _start_recording_after_hold(self):
         """Startet Aufnahme nach Hold-Threshold."""
@@ -534,18 +691,18 @@ class WhisperFlow:
     def on_press(self, key):
         """Handler für Tastendruck."""
         try:
-            trigger = self.config.get("trigger_key")
             is_trigger = False
 
-            if trigger == "alt+space":
+            # Alt+Space Combo
+            if self._has_alt_space_combo:
                 if key in (keyboard.Key.alt_l, keyboard.Key.alt_r):
                     self.alt_pressed = True
                 elif key == keyboard.Key.space and self.alt_pressed:
                     is_trigger = True
-            else:
-                trigger_keys = self._get_trigger_key()
-                if key in trigger_keys:
-                    is_trigger = True
+
+            # Direkte Keyboard-Trigger
+            if key in self._keyboard_triggers:
+                is_trigger = True
 
             if is_trigger and not self.key_pressed:
                 self.key_pressed = True
@@ -561,21 +718,46 @@ class WhisperFlow:
     def on_release(self, key):
         """Handler für Tastenfreigabe."""
         try:
-            trigger = self.config.get("trigger_key")
             is_trigger_release = False
 
-            if trigger == "alt+space":
+            # Alt+Space Combo
+            if self._has_alt_space_combo:
                 if key in (keyboard.Key.alt_l, keyboard.Key.alt_r):
                     self.alt_pressed = False
                     is_trigger_release = True
                 elif key == keyboard.Key.space:
                     is_trigger_release = True
-            else:
-                trigger_keys = self._get_trigger_key()
-                if key in trigger_keys:
-                    is_trigger_release = True
+
+            # Direkte Keyboard-Trigger
+            if key in self._keyboard_triggers:
+                is_trigger_release = True
 
             if is_trigger_release:
+                self.key_pressed = False
+                if self.hold_timer:
+                    self.hold_timer.cancel()
+                    self.hold_timer = None
+                if self.recording and self.recording_started_by_hold:
+                    self.recording_started_by_hold = False
+                    self.stop_recording()
+        except Exception:
+            pass
+
+    def on_mouse_click(self, x, y, button, pressed):
+        """Handler für Mausklick (Hold-to-Record mit Maustasten)."""
+        try:
+            if button not in self._mouse_triggers:
+                return
+
+            if pressed and not self.key_pressed:
+                self.key_pressed = True
+                self.key_press_time = time.time()
+                self.hold_timer = threading.Timer(
+                    self.config.get("hold_threshold"),
+                    self._start_recording_after_hold
+                )
+                self.hold_timer.start()
+            elif not pressed:
                 self.key_pressed = False
                 if self.hold_timer:
                     self.hold_timer.cancel()
@@ -603,6 +785,8 @@ class WhisperFlow:
             self.recording = False
         if self.listener:
             self.listener.stop()
+        if self.mouse_listener:
+            self.mouse_listener.stop()
         try:
             self.pyaudio.terminate()
         except Exception:
@@ -650,10 +834,21 @@ class WhisperFlow:
         menu.show_all()
         self.indicator.set_menu(menu)
 
+    def _start_mouse_listener(self):
+        """Startet den Mouse-Listener falls Mouse-Trigger konfiguriert sind."""
+        if self.mouse_listener:
+            self.mouse_listener.stop()
+            self.mouse_listener = None
+        if self._mouse_triggers:
+            self.mouse_listener = mouse.Listener(on_click=self.on_mouse_click)
+            self.mouse_listener.start()
+
     def run(self):
         """Startet die Anwendung."""
         self.setup_tray()
         self.audio_overlay = AudioLevelOverlay()
+
+        self._build_trigger_matchers()
 
         model_thread = threading.Thread(target=self.load_model)
         model_thread.daemon = True
@@ -665,14 +860,17 @@ class WhisperFlow:
         )
         self.listener.start()
 
+        self._start_mouse_listener()
+
         signal.signal(signal.SIGINT, lambda s, f: self.quit())
         signal.signal(signal.SIGTERM, lambda s, f: self.quit())
 
-        trigger = self.config.get('trigger_key')
-        trigger_names = {"alt+space": "ALT + LEERTASTE", "altgr": "ALTGR"}
-        trigger_display = trigger_names.get(trigger, trigger.upper())
+        # Alle Trigger-Namen anzeigen
+        trigger_keys = self.config.get("trigger_keys") or DEFAULT_CONFIG["trigger_keys"]
+        trigger_display = ", ".join(TriggerSerializer.display_name(t) for t in trigger_keys)
         safe_print("[BEREIT] Whisper Flow gestartet")
-        safe_print("         {} gedrueckt halten zum Diktieren".format(trigger_display))
+        safe_print("         Trigger: {}".format(trigger_display))
+        safe_print("         Gedrueckt halten zum Diktieren")
         safe_print("         Tray Icon fuer weitere Optionen\n")
 
         Gtk.main()
@@ -686,8 +884,11 @@ class SettingsDialog(Gtk.Dialog):
         self.config = config
         self.app = app
 
-        self.set_default_size(450, 400)
+        self.set_default_size(450, 500)
         self.set_border_width(10)
+
+        # Lokale Arbeitskopie der Trigger-Liste
+        self._trigger_list = list(config.get("trigger_keys") or DEFAULT_CONFIG["trigger_keys"])
 
         box = self.get_content_area()
         box.set_spacing(10)
@@ -713,7 +914,6 @@ class SettingsDialog(Gtk.Dialog):
         current_device = config.get("input_device")
 
         for dev in devices:
-            # Kürze lange Namen
             name = dev['name']
             if len(name) > 40:
                 name = name[:37] + "..."
@@ -738,21 +938,38 @@ class SettingsDialog(Gtk.Dialog):
         control_box.set_margin_top(5)
         control_box.set_margin_bottom(10)
 
-        # Trigger-Taste
-        key_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        key_label = Gtk.Label(label="Trigger-Taste:")
-        key_label.set_xalign(0)
-        key_box.pack_start(key_label, True, True, 0)
+        # Trigger-Tasten Label
+        trigger_label = Gtk.Label(label="Trigger-Tasten (gedrueckt halten zum Diktieren):")
+        trigger_label.set_xalign(0)
+        control_box.pack_start(trigger_label, False, False, 0)
 
-        self.key_combo = Gtk.ComboBoxText()
-        self.key_combo.append("altgr", "AltGr")
-        self.key_combo.append("alt+space", "Alt + Leertaste")
-        self.key_combo.append("ctrl", "Strg (Ctrl)")
-        self.key_combo.append("alt", "Alt")
-        self.key_combo.append("super", "Super (Windows-Taste)")
-        self.key_combo.set_active_id(config.get("trigger_key"))
-        key_box.pack_start(self.key_combo, False, False, 0)
-        control_box.pack_start(key_box, False, False, 0)
+        # Trigger-ListBox in ScrolledWindow
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(80)
+        scroll.set_max_content_height(120)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        self.trigger_listbox = Gtk.ListBox()
+        self.trigger_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        scroll.add(self.trigger_listbox)
+        control_box.pack_start(scroll, True, True, 0)
+
+        self._refresh_trigger_listbox()
+
+        # Buttons für Trigger-Verwaltung
+        trigger_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        capture_btn = Gtk.Button(label="Erfassen...")
+        capture_btn.set_tooltip_text("Taste oder Maustaste druecken zum Erfassen")
+        capture_btn.connect("clicked", self._on_capture_trigger)
+        trigger_btn_box.pack_start(capture_btn, False, False, 0)
+
+        remove_btn = Gtk.Button(label="Entfernen")
+        remove_btn.set_tooltip_text("Ausgewaehlten Trigger entfernen")
+        remove_btn.connect("clicked", self._on_remove_trigger)
+        trigger_btn_box.pack_start(remove_btn, False, False, 0)
+
+        control_box.pack_start(trigger_btn_box, False, False, 0)
 
         # Hold Threshold
         threshold_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -840,10 +1057,121 @@ class SettingsDialog(Gtk.Dialog):
         self.connect("response", self.on_response)
         self.show_all()
 
+    def _refresh_trigger_listbox(self):
+        """Aktualisiert die ListBox mit den aktuellen Triggern."""
+        for child in self.trigger_listbox.get_children():
+            self.trigger_listbox.remove(child)
+        for trigger_str in self._trigger_list:
+            label = Gtk.Label(label=TriggerSerializer.display_name(trigger_str))
+            label.set_xalign(0)
+            label.set_margin_start(8)
+            label.set_margin_end(8)
+            label.set_margin_top(4)
+            label.set_margin_bottom(4)
+            row = Gtk.ListBoxRow()
+            row.add(label)
+            row.trigger_str = trigger_str  # Referenz zum Serialisierungsstring
+            self.trigger_listbox.add(row)
+        self.trigger_listbox.show_all()
+
+    def _on_remove_trigger(self, widget):
+        """Entfernt den selektierten Trigger aus der Liste."""
+        row = self.trigger_listbox.get_selected_row()
+        if row is None:
+            return
+        trigger_str = row.trigger_str
+        if trigger_str in self._trigger_list:
+            self._trigger_list.remove(trigger_str)
+        self._refresh_trigger_listbox()
+
+    def _on_capture_trigger(self, widget):
+        """Öffnet einen modalen Capture-Dialog zum Erfassen einer Taste/Maustaste."""
+        dialog = Gtk.Dialog(
+            title="Trigger erfassen",
+            parent=self,
+            flags=Gtk.DialogFlags.MODAL | Gtk.DialogFlags.DESTROY_WITH_PARENT
+        )
+        dialog.set_default_size(350, 120)
+        dialog.set_border_width(15)
+
+        content = dialog.get_content_area()
+        label = Gtk.Label(label="Druecke eine Taste oder Maustaste...\n(Escape = Abbruch, Maus links/rechts/mitte werden ignoriert)")
+        label.set_line_wrap(True)
+        label.set_justify(Gtk.Justification.CENTER)
+        content.pack_start(label, True, True, 10)
+        dialog.show_all()
+
+        captured = {}  # {"serialized": str} oder leer bei Abbruch
+        temp_kb_listener = None
+        temp_mouse_listener = None
+        timeout_id = None
+
+        def cleanup_and_close():
+            """Stoppt Listener und schließt Dialog."""
+            if timeout_id is not None:
+                GLib.source_remove(timeout_id)
+            if temp_kb_listener is not None:
+                try:
+                    temp_kb_listener.stop()
+                except Exception:
+                    pass
+            if temp_mouse_listener is not None:
+                try:
+                    temp_mouse_listener.stop()
+                except Exception:
+                    pass
+            GLib.idle_add(dialog.destroy)
+
+        def on_capture_key_press(key):
+            # Escape = Abbruch
+            if key == keyboard.Key.esc:
+                cleanup_and_close()
+                return False
+            serialized = TriggerSerializer.serialize_keyboard_key(key)
+            if serialized:
+                captured["serialized"] = serialized
+                cleanup_and_close()
+                GLib.idle_add(self._add_captured_trigger, serialized)
+            return False  # Stop listener
+
+        def on_capture_mouse_click(x, y, button, pressed):
+            if not pressed:
+                return  # Nur bei Press reagieren
+            # Maus links/rechts/mitte ignorieren (UI-Interaktion)
+            if button in (mouse.Button.left, mouse.Button.right, mouse.Button.middle):
+                return
+            serialized = TriggerSerializer.serialize_mouse_button(button)
+            if serialized:
+                captured["serialized"] = serialized
+                cleanup_and_close()
+                GLib.idle_add(self._add_captured_trigger, serialized)
+            return False  # Stop listener
+
+        def on_timeout():
+            cleanup_and_close()
+            return False
+
+        temp_kb_listener = keyboard.Listener(on_press=on_capture_key_press)
+        temp_mouse_listener = mouse.Listener(on_click=on_capture_mouse_click)
+        temp_kb_listener.start()
+        temp_mouse_listener.start()
+
+        # 5s Timeout
+        timeout_id = GLib.timeout_add(5000, on_timeout)
+
+    def _add_captured_trigger(self, serialized):
+        """Fügt einen erfassten Trigger hinzu falls nicht Duplikat."""
+        if serialized not in self._trigger_list:
+            self._trigger_list.append(serialized)
+            self._refresh_trigger_listbox()
+
     def on_response(self, dialog, response):
         if response == Gtk.ResponseType.OK:
-            # Einstellungen speichern
-            self.config.set("trigger_key", self.key_combo.get_active_id())
+            # Trigger-Keys speichern
+            self.config.config["trigger_keys"] = list(self._trigger_list)
+            # Altes trigger_key entfernen falls vorhanden
+            self.config.config.pop("trigger_key", None)
+
             self.config.set("hold_threshold", self.threshold_spin.get_value())
             self.config.set("model_size", self.model_combo.get_active_id())
 
@@ -857,6 +1185,11 @@ class SettingsDialog(Gtk.Dialog):
             # Autostart aktivieren/deaktivieren
             self._set_autostart(self.autostart_check.get_active())
 
+            # Trigger-Matchers neu aufbauen und Mouse-Listener neu starten
+            self.app._build_trigger_matchers()
+            self.app._start_mouse_listener()
+
+            self.config.save()
             self.app._show_notification("Einstellungen", "Einstellungen gespeichert")
 
     def _set_autostart(self, enabled):
