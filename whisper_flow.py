@@ -71,7 +71,9 @@ DEFAULT_CONFIG = {
     "hold_threshold": 0.3,
     "trigger_keys": ["key:alt_gr", "key:vk:65027"],
     "autostart": True,
-    "input_device": None  # None = Standard-Gerät
+    "input_device": None,  # None = Standard-Gerät
+    "double_tap_enabled": False,
+    "double_tap_interval": 0.4  # Zeitfenster in Sekunden
 }
 
 # Audio-Einstellungen
@@ -444,6 +446,10 @@ class WhisperFlow:
         self.recording_started_by_hold = False
         self.alt_pressed = False
 
+        # Double-tap detection
+        self._last_trigger_release_time = 0
+        self._double_tap_recording = False
+
         # Tray Icon
         self.indicator = None
         self.status_item = None
@@ -688,6 +694,47 @@ class WhisperFlow:
             self.recording_started_by_hold = True
             self.start_recording()
 
+    def _handle_trigger_press(self):
+        """Gemeinsame Press-Logik für Keyboard und Maus-Trigger."""
+        if self.key_pressed:
+            return
+        self.key_pressed = True
+        self.key_press_time = time.time()
+        self.hold_timer = threading.Timer(
+            self.config.get("hold_threshold"),
+            self._start_recording_after_hold
+        )
+        self.hold_timer.start()
+
+    def _handle_trigger_release(self):
+        """Gemeinsame Release-Logik für Keyboard und Maus-Trigger."""
+        self.key_pressed = False
+        if self.hold_timer:
+            self.hold_timer.cancel()
+            self.hold_timer = None
+
+        now = time.time()
+        double_tap_enabled = self.config.get("double_tap_enabled")
+        interval = self.config.get("double_tap_interval") or 0.4
+
+        if self.recording and self.recording_started_by_hold:
+            # Hold-to-Record: Aufnahme stoppen
+            self.recording_started_by_hold = False
+            self.stop_recording()
+        elif self.recording and self._double_tap_recording:
+            # Freihändig-Aufnahme läuft: Doppel-Tipp zum Stoppen?
+            if now - self._last_trigger_release_time < interval:
+                self._double_tap_recording = False
+                self.stop_recording()
+            # Sonst: ignorieren, Aufnahme läuft weiter
+        elif not self.recording and double_tap_enabled:
+            # Keine Aufnahme: Doppel-Tipp zum Starten?
+            if now - self._last_trigger_release_time < interval:
+                self._double_tap_recording = True
+                self.start_recording()
+
+        self._last_trigger_release_time = now
+
     def on_press(self, key):
         """Handler für Tastendruck."""
         try:
@@ -704,14 +751,8 @@ class WhisperFlow:
             if key in self._keyboard_triggers:
                 is_trigger = True
 
-            if is_trigger and not self.key_pressed:
-                self.key_pressed = True
-                self.key_press_time = time.time()
-                self.hold_timer = threading.Timer(
-                    self.config.get("hold_threshold"),
-                    self._start_recording_after_hold
-                )
-                self.hold_timer.start()
+            if is_trigger:
+                self._handle_trigger_press()
         except Exception:
             pass
 
@@ -733,38 +774,20 @@ class WhisperFlow:
                 is_trigger_release = True
 
             if is_trigger_release:
-                self.key_pressed = False
-                if self.hold_timer:
-                    self.hold_timer.cancel()
-                    self.hold_timer = None
-                if self.recording and self.recording_started_by_hold:
-                    self.recording_started_by_hold = False
-                    self.stop_recording()
+                self._handle_trigger_release()
         except Exception:
             pass
 
     def on_mouse_click(self, x, y, button, pressed):
-        """Handler für Mausklick (Hold-to-Record mit Maustasten)."""
+        """Handler für Mausklick (Hold-to-Record und Doppel-Tipp mit Maustasten)."""
         try:
             if button not in self._mouse_triggers:
                 return
 
-            if pressed and not self.key_pressed:
-                self.key_pressed = True
-                self.key_press_time = time.time()
-                self.hold_timer = threading.Timer(
-                    self.config.get("hold_threshold"),
-                    self._start_recording_after_hold
-                )
-                self.hold_timer.start()
-            elif not pressed:
-                self.key_pressed = False
-                if self.hold_timer:
-                    self.hold_timer.cancel()
-                    self.hold_timer = None
-                if self.recording and self.recording_started_by_hold:
-                    self.recording_started_by_hold = False
-                    self.stop_recording()
+            if pressed:
+                self._handle_trigger_press()
+            else:
+                self._handle_trigger_release()
         except Exception:
             pass
 
@@ -985,6 +1008,13 @@ class SettingsDialog(Gtk.Dialog):
         threshold_box.pack_start(self.threshold_spin, False, False, 0)
         control_box.pack_start(threshold_box, False, False, 0)
 
+        # Doppel-Tipp Checkbox
+        self.double_tap_check = Gtk.CheckButton(label="Doppel-Tipp fuer freihaendiges Diktieren")
+        self.double_tap_check.set_tooltip_text(
+            "Trigger-Taste 2x schnell druecken = Aufnahme starten/stoppen ohne Halten")
+        self.double_tap_check.set_active(config.get("double_tap_enabled") or False)
+        control_box.pack_start(self.double_tap_check, False, False, 0)
+
         control_frame.add(control_box)
         box.pack_start(control_frame, False, False, 0)
 
@@ -1173,6 +1203,7 @@ class SettingsDialog(Gtk.Dialog):
             self.config.config.pop("trigger_key", None)
 
             self.config.set("hold_threshold", self.threshold_spin.get_value())
+            self.config.set("double_tap_enabled", self.double_tap_check.get_active())
             self.config.set("model_size", self.model_combo.get_active_id())
 
             # Aufnahmegerät
