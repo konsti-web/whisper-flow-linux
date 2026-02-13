@@ -73,7 +73,10 @@ DEFAULT_CONFIG = {
     "autostart": True,
     "input_device": None,  # None = Standard-Gerät
     "double_tap_enabled": False,
-    "double_tap_interval": 0.4  # Zeitfenster in Sekunden
+    "double_tap_interval": 0.4,  # Zeitfenster in Sekunden
+    "device": "auto",        # auto | cpu | cuda
+    "compute_type": "auto",  # auto | float16 | int8 | float32 | int8_float32
+    "backend": "faster-whisper",  # faster-whisper | openai-whisper
 }
 
 # Audio-Einstellungen
@@ -457,6 +460,9 @@ class WhisperFlow:
         # Audio-Level Overlay
         self.audio_overlay = None
 
+        # Backend
+        self.backend = self.config.get("backend") or "faster-whisper"
+
     def get_input_device_index(self):
         """Gibt den Index des konfigurierten Eingabegeräts zurück."""
         device_name = self.config.get("input_device")
@@ -469,15 +475,86 @@ class WhisperFlow:
                 return dev['index']
         return None  # Fallback auf Standard
 
+    @staticmethod
+    def detect_device(backend="faster-whisper"):
+        """Detect best available device and compute type."""
+        if backend == "openai-whisper":
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    return "cuda", "float16"
+                return "cpu", "float32"
+            except ImportError:
+                return "cpu", "float32"
+        else:
+            import ctranslate2
+            try:
+                types = ctranslate2.get_supported_compute_types("cuda")
+                for ct in ["float16", "int8", "float32"]:
+                    if ct in types:
+                        return "cuda", ct
+                return "cuda", "float32"
+            except Exception as e:
+                safe_print("[INFO] Kein GPU gefunden ({}), verwende CPU".format(e))
+                return "cpu", "int8"
+
     def load_model(self):
         """Lädt das Whisper Model."""
         model_size = self.config.get("model_size")
-        safe_print("Lade Whisper Model '{}' auf GPU...".format(model_size))
-        self.model = WhisperModel(model_size, device="cuda", compute_type="float16")
+        device = self.config.get("device")
+        compute_type = self.config.get("compute_type")
+        self.backend = self.config.get("backend") or "faster-whisper"
+
+        if device == "auto" or compute_type == "auto":
+            det_device, det_compute = self.detect_device(self.backend)
+            if device == "auto":
+                device = det_device
+            if compute_type == "auto":
+                compute_type = det_compute
+
+        safe_print("Lade Whisper Model '{}' auf {} ({}) [{}]...".format(model_size, device, compute_type, self.backend))
+        self._update_status("Lade Model ({})...".format(device))
+
+        try:
+            if self.backend == "openai-whisper":
+                import whisper
+                self.model = whisper.load_model(model_size, device=device)
+            else:
+                self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        except ImportError as e:
+            safe_print("[FEHLER] Backend '{}' nicht installiert: {}".format(self.backend, e))
+            self._update_status("Fehler: Backend nicht installiert")
+            self._show_notification("Whisper Flow - Fehler",
+                                    "Backend '{}' nicht installiert.\n{}".format(self.backend, e))
+            return
+        except Exception as e:
+            if device != "cpu":
+                safe_print("[WARNUNG] {} fehlgeschlagen: {}".format(device.upper(), e))
+                safe_print("[INFO] Fallback auf CPU...")
+                self._show_notification("Whisper Flow", "GPU nicht verfuegbar, verwende CPU")
+                try:
+                    if self.backend == "openai-whisper":
+                        import whisper
+                        self.model = whisper.load_model(model_size, device="cpu")
+                    else:
+                        self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
+                    device = "cpu"
+                except Exception as e2:
+                    safe_print("[FEHLER] Model laden fehlgeschlagen: {}".format(e2))
+                    self._update_status("Fehler: Model laden fehlgeschlagen")
+                    self._show_notification("Whisper Flow - Fehler", str(e2))
+                    return
+            else:
+                safe_print("[FEHLER] Model laden fehlgeschlagen: {}".format(e))
+                self._update_status("Fehler: Model laden fehlgeschlagen")
+                self._show_notification("Whisper Flow - Fehler", str(e))
+                return
+
         self.model_loaded = True
-        safe_print("Model geladen!")
-        self._update_status("Bereit")
-        self._show_notification("Whisper Flow", "Bereit - Taste gedrueckt halten zum Diktieren")
+        device_label = "GPU" if device == "cuda" else "CPU"
+        safe_print("Model geladen! (Geraet: {})".format(device_label))
+        self._update_status("Bereit ({})".format(device_label))
+        self._show_notification("Whisper Flow", "Bereit ({}) - Taste gedrueckt halten zum Diktieren".format(device_label))
 
     def start_recording(self):
         """Startet die Audioaufnahme."""
@@ -589,21 +666,33 @@ class WhisperFlow:
                 audio_array = np.interp(indices, np.arange(len(audio_array)), audio_array)
 
             # Transkribieren - numpy array umgeht PyAV Encoding-Problem
-            segments, info = self.model.transcribe(
-                audio_array,
-                language=self.config.get("language"),
-                beam_size=1,
-                vad_filter=True,
-                condition_on_previous_text=False
-            )
+            lang = self.config.get("language")
 
-            # Explizit als Liste materialisieren
-            text_parts = []
-            for segment in segments:
-                seg_text = segment.text
-                if seg_text:
-                    text_parts.append(seg_text)
-            text = " ".join(text_parts).strip()
+            if self.backend == "openai-whisper":
+                result = self.model.transcribe(
+                    audio_array,
+                    language=lang,
+                    beam_size=1,
+                    condition_on_previous_text=False,
+                    fp16=(self.config.get("device") != "cpu")
+                )
+                text = result["text"].strip()
+            else:
+                segments, info = self.model.transcribe(
+                    audio_array,
+                    language=lang,
+                    beam_size=1,
+                    vad_filter=True,
+                    condition_on_previous_text=False
+                )
+
+                # Explizit als Liste materialisieren
+                text_parts = []
+                for segment in segments:
+                    seg_text = segment.text
+                    if seg_text:
+                        text_parts.append(seg_text)
+                text = " ".join(text_parts).strip()
 
             if text:
                 safe_print("[TEXT] {}".format(text))
@@ -663,9 +752,19 @@ class WhisperFlow:
             pass
 
     def _update_status(self, status):
-        """Aktualisiert den Status im Tray-Menü."""
+        """Aktualisiert den Status im Tray-Menü und Icon."""
         if self.status_item:
             GLib.idle_add(self.status_item.set_label, "Status: {}".format(status))
+        if self.indicator:
+            if "Lade" in status or "Verarbeite" in status:
+                icon = "content-loading-symbolic"
+            elif "Fehler" in status:
+                icon = "dialog-error-symbolic"
+            elif "Aufnahme" in status:
+                icon = "media-record-symbolic"
+            else:
+                icon = "audio-input-microphone"
+            GLib.idle_add(self.indicator.set_icon, icon)
 
     def _build_trigger_matchers(self):
         """Baut aus config trigger_keys die Matcher-Sets."""
@@ -1029,6 +1128,19 @@ class SettingsDialog(Gtk.Dialog):
         whisper_box.set_margin_top(5)
         whisper_box.set_margin_bottom(10)
 
+        # Backend
+        backend_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        backend_label = Gtk.Label(label="Backend:")
+        backend_label.set_xalign(0)
+        backend_box.pack_start(backend_label, True, True, 0)
+
+        self.backend_combo = Gtk.ComboBoxText()
+        self.backend_combo.append("faster-whisper", "faster-whisper (Standard)")
+        self.backend_combo.append("openai-whisper", "openai-whisper (AMD GPU)")
+        self.backend_combo.set_active_id(config.get("backend") or "faster-whisper")
+        backend_box.pack_start(self.backend_combo, False, False, 0)
+        whisper_box.pack_start(backend_box, False, False, 0)
+
         # Model Size
         model_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         model_label = Gtk.Label(label="Model:")
@@ -1056,6 +1168,36 @@ class SettingsDialog(Gtk.Dialog):
         self.lang_combo.set_active_id(current_lang)
         lang_box.pack_start(self.lang_combo, False, False, 0)
         whisper_box.pack_start(lang_box, False, False, 0)
+
+        # Gerät (Device)
+        device_hw_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        device_hw_label = Gtk.Label(label="Geraet:")
+        device_hw_label.set_xalign(0)
+        device_hw_box.pack_start(device_hw_label, True, True, 0)
+
+        self.device_hw_combo = Gtk.ComboBoxText()
+        self.device_hw_combo.append("auto", "Auto (empfohlen)")
+        self.device_hw_combo.append("cpu", "CPU")
+        self.device_hw_combo.append("cuda", "CUDA (GPU)")
+        self.device_hw_combo.set_active_id(config.get("device") or "auto")
+        device_hw_box.pack_start(self.device_hw_combo, False, False, 0)
+        whisper_box.pack_start(device_hw_box, False, False, 0)
+
+        # Rechentyp (Compute Type)
+        compute_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        compute_label = Gtk.Label(label="Rechentyp:")
+        compute_label.set_xalign(0)
+        compute_box.pack_start(compute_label, True, True, 0)
+
+        self.compute_combo = Gtk.ComboBoxText()
+        self.compute_combo.append("auto", "Auto (empfohlen)")
+        self.compute_combo.append("float16", "float16")
+        self.compute_combo.append("int8", "int8")
+        self.compute_combo.append("float32", "float32")
+        self.compute_combo.append("int8_float32", "int8_float32")
+        self.compute_combo.set_active_id(config.get("compute_type") or "auto")
+        compute_box.pack_start(self.compute_combo, False, False, 0)
+        whisper_box.pack_start(compute_box, False, False, 0)
 
         whisper_frame.add(whisper_box)
         box.pack_start(whisper_frame, False, False, 0)
@@ -1215,6 +1357,10 @@ class SettingsDialog(Gtk.Dialog):
 
             lang = self.lang_combo.get_active_id()
             self.config.set("language", None if lang == "auto" else lang)
+
+            self.config.set("backend", self.backend_combo.get_active_id())
+            self.config.set("device", self.device_hw_combo.get_active_id())
+            self.config.set("compute_type", self.compute_combo.get_active_id())
 
             # Autostart aktivieren/deaktivieren
             self._set_autostart(self.autostart_check.get_active())
