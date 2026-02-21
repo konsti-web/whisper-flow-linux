@@ -2,13 +2,13 @@
 
 Speech-to-text for Linux. Hold a trigger key, speak, and the transcribed text is automatically inserted at the cursor position.
 
-Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with GPU acceleration for fast, local transcription - no cloud, no data leaving your device.
+Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) or [openai-whisper](https://github.com/openai/whisper) for fast, local transcription with GPU acceleration - no cloud, no data leaving your device.
 
 ## Features
 
 - **Hold-to-Record** - Hold the trigger key, speak, release to transcribe
 - **Double-Tap** - Tap trigger 2x quickly for hands-free dictation (optional)
-- **GPU-accelerated** - NVIDIA CUDA for fast transcription
+- **GPU-accelerated** - NVIDIA CUDA (faster-whisper) or AMD ROCm (openai-whisper)
 - **VU-Meter Overlay** - Visual audio level display during recording
 - **System Tray** - Runs in the background with a tray icon
 - **Fully configurable** - Trigger key, language, model, input device
@@ -18,7 +18,7 @@ Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with GPU accele
 ## Requirements
 
 - **Ubuntu/Debian** based Linux (tested on Ubuntu 24.04)
-- **NVIDIA GPU** with CUDA support
+- **NVIDIA GPU** with CUDA support, or **AMD GPU** with ROCm (via openai-whisper backend)
 - **Python 3.10+**
 - **X11** (Wayland is not supported due to xdotool/xclip dependency)
 
@@ -71,12 +71,14 @@ Right-click the tray icon > **Einstellungen** (Settings):
 
 | Setting | Description |
 |---|---|
-| **Aufnahmegeraet** | Select input microphone |
+| **Aufnahmegerät** | Select input microphone (shows system default) |
 | **Trigger-Tasten** | Any keyboard or mouse button as trigger |
 | **Haltezeit** | Hold duration before recording starts (default: 0.3s) |
 | **Doppel-Tipp** | Hands-free dictation via double-tap |
+| **Backend** | faster-whisper (NVIDIA) or openai-whisper (AMD) |
 | **Model** | Whisper model size (tiny to large-v3-turbo) |
 | **Sprache** | German, English, or Automatic |
+| **Gerät / Rechentyp** | GPU/CPU selection and compute type (under "Erweitert") |
 | **Autostart** | Start on system boot |
 
 ### Changing Trigger Keys
@@ -112,7 +114,10 @@ Config file: `~/.config/whisper-flow/config.json`
   "autostart": true,
   "input_device": null,
   "double_tap_enabled": false,
-  "double_tap_interval": 0.4
+  "double_tap_interval": 0.4,
+  "backend": "faster-whisper",
+  "device": "auto",
+  "compute_type": "auto"
 }
 ```
 
@@ -137,9 +142,14 @@ The Whisper model is downloaded on first launch. Wait until the tray menu shows 
 - Select the correct input device in settings
 - Check that the microphone is enabled in system settings
 
-**CUDA errors**
+**CUDA errors (NVIDIA)**
 - NVIDIA drivers installed? Check with `nvidia-smi`
 - CUDA is automatically installed via pip (no separate CUDA toolkit needed)
+
+**ROCm errors (AMD)**
+- ROCm installed? Check with `rocminfo`
+- Use the `openai-whisper` backend in settings
+- Install PyTorch with ROCm: `pip install torch --index-url https://download.pytorch.org/whl/rocm6.2`
 
 ## License
 
