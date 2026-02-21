@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Whisper Flow fuer Linux
-Trigger-Taste gedrueckt halten oder doppelt tippen zum Diktieren.
-Transkribiert mit faster-whisper und fuegt Text an der Cursor-Position ein.
-Mit System Tray Icon fuer Kontrolle und Einstellungen.
+Whisper Flow für Linux
+Trigger-Taste gedrückt halten oder doppelt tippen zum Diktieren.
+Transkribiert mit faster-whisper und fügt Text an der Cursor-Position ein.
+Mit System Tray Icon für Kontrolle und Einstellungen.
 """
 
 import subprocess
@@ -36,7 +36,7 @@ def check_import(module, package_name):
     try:
         return __import__(module)
     except ImportError:
-        print("Fehler: {} nicht installiert. Fuehre aus: pip install {}".format(package_name, package_name))
+        print("Fehler: {} nicht installiert. Führe aus: pip install {}".format(package_name, package_name))
         sys.exit(1)
 
 check_import('pynput', 'pynput')
@@ -456,12 +456,14 @@ class WhisperFlow:
         # Tray Icon
         self.indicator = None
         self.status_item = None
+        self.pause_item = None
 
         # Audio-Level Overlay
         self.audio_overlay = None
 
         # Backend
         self.backend = self.config.get("backend") or "faster-whisper"
+        self.actual_device = "cpu"  # Wird in load_model() auf tatsächliches Device gesetzt
 
     def get_input_device_index(self):
         """Gibt den Index des konfigurierten Eingabegeräts zurück."""
@@ -531,7 +533,7 @@ class WhisperFlow:
             if device != "cpu":
                 safe_print("[WARNUNG] {} fehlgeschlagen: {}".format(device.upper(), e))
                 safe_print("[INFO] Fallback auf CPU...")
-                self._show_notification("Whisper Flow", "GPU nicht verfuegbar, verwende CPU")
+                self._show_notification("Whisper Flow", "GPU nicht verfügbar, verwende CPU")
                 try:
                     if self.backend == "openai-whisper":
                         import whisper
@@ -551,10 +553,11 @@ class WhisperFlow:
                 return
 
         self.model_loaded = True
+        self.actual_device = device
         device_label = "GPU" if device == "cuda" else "CPU"
-        safe_print("Model geladen! (Geraet: {})".format(device_label))
+        safe_print("Model geladen! (Gerät: {})".format(device_label))
         self._update_status("Bereit ({})".format(device_label))
-        self._show_notification("Whisper Flow", "Bereit ({}) - Taste gedrueckt halten zum Diktieren".format(device_label))
+        self._show_notification("Whisper Flow", "Bereit ({}) - Taste gedrückt halten zum Diktieren".format(device_label))
 
     def start_recording(self):
         """Startet die Audioaufnahme."""
@@ -588,7 +591,7 @@ class WhisperFlow:
                 else:
                     dev_info = self.pyaudio.get_default_input_device_info()
                 native_rate = int(dev_info.get('defaultSampleRate', 48000))
-                safe_print("[INFO] 16kHz nicht unterstuetzt, verwende {}Hz".format(native_rate))
+                safe_print("[INFO] 16kHz nicht unterstützt, verwende {}Hz".format(native_rate))
                 self.recording_rate = native_rate
                 self.stream = self.pyaudio.open(
                     format=pyaudio.paInt16,
@@ -599,7 +602,7 @@ class WhisperFlow:
                     frames_per_buffer=CHUNK_SIZE
                 )
             except Exception as e:
-                safe_print("[FEHLER] Konnte Audio-Stream nicht oeffnen: {}".format(e))
+                safe_print("[FEHLER] Konnte Audio-Stream nicht öffnen: {}".format(e))
                 self.recording = False
                 self._update_status("Fehler: Audio")
                 return
@@ -674,7 +677,7 @@ class WhisperFlow:
                     language=lang,
                     beam_size=1,
                     condition_on_previous_text=False,
-                    fp16=(self.config.get("device") != "cpu")
+                    fp16=(self.actual_device != "cpu")
                 )
                 text = result["text"].strip()
             else:
@@ -754,7 +757,7 @@ class WhisperFlow:
     def _update_status(self, status):
         """Aktualisiert den Status im Tray-Menü und Icon."""
         if self.status_item:
-            GLib.idle_add(self.status_item.set_label, "Status: {}".format(status))
+            GLib.idle_add(self.status_item.set_label, status)
         if self.indicator:
             if "Lade" in status or "Verarbeite" in status:
                 icon = "content-loading-symbolic"
@@ -898,6 +901,9 @@ class WhisperFlow:
         self.paused = not self.paused
         status = "Pausiert" if self.paused else "Bereit"
         self._update_status(status)
+        if self.pause_item:
+            label = "Fortsetzen" if self.paused else "Pausieren"
+            GLib.idle_add(self.pause_item.set_label, label)
         self._show_notification("Whisper Flow", "Spracherkennung {}".format(status.lower()))
         safe_print("[INFO] Spracherkennung {}".format(status.lower()))
 
@@ -936,15 +942,15 @@ class WhisperFlow:
 
         menu = Gtk.Menu()
 
-        self.status_item = Gtk.MenuItem(label="Status: Lade Model...")
+        self.status_item = Gtk.MenuItem(label="Lade Model...")
         self.status_item.set_sensitive(False)
         menu.append(self.status_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        pause_item = Gtk.MenuItem(label="Pausieren / Fortsetzen")
-        pause_item.connect("activate", self.toggle_pause)
-        menu.append(pause_item)
+        self.pause_item = Gtk.MenuItem(label="Pausieren")
+        self.pause_item.connect("activate", self.toggle_pause)
+        menu.append(self.pause_item)
 
         settings_item = Gtk.MenuItem(label="Einstellungen...")
         settings_item.connect("activate", self.show_settings)
@@ -995,8 +1001,8 @@ class WhisperFlow:
         trigger_display = ", ".join(TriggerSerializer.display_name(t) for t in trigger_keys)
         safe_print("[BEREIT] Whisper Flow gestartet")
         safe_print("         Trigger: {}".format(trigger_display))
-        safe_print("         Gedrueckt halten zum Diktieren")
-        safe_print("         Tray Icon fuer weitere Optionen\n")
+        safe_print("         Gedrückt halten zum Diktieren")
+        safe_print("         Tray Icon für weitere Optionen\n")
 
         Gtk.main()
 
@@ -1009,35 +1015,37 @@ class SettingsDialog(Gtk.Dialog):
         self.config = config
         self.app = app
 
-        self.set_default_size(450, 500)
-        self.set_border_width(10)
+        self.set_default_size(420, -1)
+        self.set_border_width(12)
+
+        self._setup_css()
 
         # Lokale Arbeitskopie der Trigger-Liste
         self._trigger_list = list(config.get("trigger_keys") or DEFAULT_CONFIG["trigger_keys"])
 
         box = self.get_content_area()
-        box.set_spacing(10)
+        box.set_spacing(6)
 
-        # --- Audio-Einstellungen ---
-        audio_frame = Gtk.Frame(label=" Audio ")
-        audio_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        audio_box.set_margin_start(10)
-        audio_box.set_margin_end(10)
-        audio_box.set_margin_top(5)
-        audio_box.set_margin_bottom(10)
+        # --- Audio ---
+        audio_frame = self._make_section("Audio")
+        audio_grid = Gtk.Grid(column_spacing=12, row_spacing=6)
+        audio_grid.set_margin_start(12)
+        audio_grid.set_margin_end(12)
+        audio_grid.set_margin_top(6)
+        audio_grid.set_margin_bottom(8)
 
-        # Aufnahmegerät
-        device_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        device_label = Gtk.Label(label="Aufnahmegeraet:")
-        device_label.set_xalign(0)
-        device_box.pack_start(device_label, True, True, 0)
+        device_label = Gtk.Label(label="Aufnahmegerät:", xalign=0)
+        audio_grid.attach(device_label, 0, 0, 1, 1)
 
         self.device_combo = Gtk.ComboBoxText()
-        self.device_combo.append("default", "Standard (System-Default)")
+        default_name = self._get_default_device_name()
+        if default_name:
+            self.device_combo.append("default", "System-Standard ({})".format(default_name))
+        else:
+            self.device_combo.append("default", "System-Standard")
 
         devices = get_audio_devices()
         current_device = config.get("input_device")
-
         for dev in devices:
             name = dev['name']
             if len(name) > 40:
@@ -1049,29 +1057,26 @@ class SettingsDialog(Gtk.Dialog):
         else:
             self.device_combo.set_active_id("default")
 
-        device_box.pack_start(self.device_combo, False, False, 0)
-        audio_box.pack_start(device_box, False, False, 0)
+        self.device_combo.set_hexpand(True)
+        audio_grid.attach(self.device_combo, 1, 0, 1, 1)
 
-        audio_frame.add(audio_box)
+        audio_frame.add(audio_grid)
         box.pack_start(audio_frame, False, False, 0)
 
         # --- Steuerung ---
-        control_frame = Gtk.Frame(label=" Steuerung ")
-        control_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        control_box.set_margin_start(10)
-        control_box.set_margin_end(10)
-        control_box.set_margin_top(5)
-        control_box.set_margin_bottom(10)
+        control_frame = self._make_section("Steuerung")
+        control_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        control_box.set_margin_start(12)
+        control_box.set_margin_end(12)
+        control_box.set_margin_top(6)
+        control_box.set_margin_bottom(8)
 
-        # Trigger-Tasten Label
-        trigger_label = Gtk.Label(label="Trigger-Tasten (gedrueckt halten zum Diktieren):")
-        trigger_label.set_xalign(0)
+        trigger_label = Gtk.Label(label="Trigger-Tasten (gedrückt halten zum Diktieren):", xalign=0)
         control_box.pack_start(trigger_label, False, False, 0)
 
-        # Trigger-ListBox in ScrolledWindow
         scroll = Gtk.ScrolledWindow()
-        scroll.set_min_content_height(80)
-        scroll.set_max_content_height(120)
+        scroll.set_min_content_height(70)
+        scroll.set_max_content_height(100)
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
         self.trigger_listbox = Gtk.ListBox()
@@ -1081,39 +1086,37 @@ class SettingsDialog(Gtk.Dialog):
 
         self._refresh_trigger_listbox()
 
-        # Buttons für Trigger-Verwaltung
-        trigger_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
+        trigger_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         capture_btn = Gtk.Button(label="Erfassen...")
-        capture_btn.set_tooltip_text("Taste oder Maustaste druecken zum Erfassen")
+        capture_btn.set_tooltip_text("Taste oder Maustaste drücken zum Erfassen")
         capture_btn.connect("clicked", self._on_capture_trigger)
         trigger_btn_box.pack_start(capture_btn, False, False, 0)
 
         remove_btn = Gtk.Button(label="Entfernen")
-        remove_btn.set_tooltip_text("Ausgewaehlten Trigger entfernen")
+        remove_btn.set_tooltip_text("Ausgewählten Trigger entfernen")
         remove_btn.connect("clicked", self._on_remove_trigger)
         trigger_btn_box.pack_start(remove_btn, False, False, 0)
-
         control_box.pack_start(trigger_btn_box, False, False, 0)
 
-        # Hold Threshold
-        threshold_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        threshold_label = Gtk.Label(label="Haltezeit (Sekunden):")
-        threshold_label.set_xalign(0)
-        threshold_box.pack_start(threshold_label, True, True, 0)
+        ctrl_grid = Gtk.Grid(column_spacing=12, row_spacing=6)
+        ctrl_grid.set_margin_top(4)
+
+        threshold_label = Gtk.Label(label="Haltezeit (Sekunden):", xalign=0)
+        threshold_label.set_hexpand(True)
+        ctrl_grid.attach(threshold_label, 0, 0, 1, 1)
 
         self.threshold_spin = Gtk.SpinButton()
         self.threshold_spin.set_range(0.1, 2.0)
         self.threshold_spin.set_increments(0.1, 0.5)
         self.threshold_spin.set_digits(1)
         self.threshold_spin.set_value(config.get("hold_threshold"))
-        threshold_box.pack_start(self.threshold_spin, False, False, 0)
-        control_box.pack_start(threshold_box, False, False, 0)
+        ctrl_grid.attach(self.threshold_spin, 1, 0, 1, 1)
 
-        # Doppel-Tipp Checkbox
-        self.double_tap_check = Gtk.CheckButton(label="Doppel-Tipp fuer freihaendiges Diktieren")
+        control_box.pack_start(ctrl_grid, False, False, 0)
+
+        self.double_tap_check = Gtk.CheckButton(label="Doppel-Tipp für freihändiges Diktieren")
         self.double_tap_check.set_tooltip_text(
-            "Trigger-Taste 2x schnell druecken = Aufnahme starten/stoppen ohne Halten")
+            "Trigger-Taste 2x schnell drücken = Aufnahme starten/stoppen ohne Halten")
         self.double_tap_check.set_active(config.get("double_tap_enabled") or False)
         control_box.pack_start(self.double_tap_check, False, False, 0)
 
@@ -1121,74 +1124,63 @@ class SettingsDialog(Gtk.Dialog):
         box.pack_start(control_frame, False, False, 0)
 
         # --- Whisper ---
-        whisper_frame = Gtk.Frame(label=" Whisper ")
-        whisper_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        whisper_box.set_margin_start(10)
-        whisper_box.set_margin_end(10)
-        whisper_box.set_margin_top(5)
-        whisper_box.set_margin_bottom(10)
+        whisper_frame = self._make_section("Whisper")
+        whisper_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        whisper_box.set_margin_start(12)
+        whisper_box.set_margin_end(12)
+        whisper_box.set_margin_top(6)
+        whisper_box.set_margin_bottom(8)
 
-        # Backend
-        backend_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        backend_label = Gtk.Label(label="Backend:")
-        backend_label.set_xalign(0)
-        backend_box.pack_start(backend_label, True, True, 0)
+        whisper_grid = Gtk.Grid(column_spacing=12, row_spacing=6)
 
+        backend_label = Gtk.Label(label="Backend:", xalign=0)
+        whisper_grid.attach(backend_label, 0, 0, 1, 1)
         self.backend_combo = Gtk.ComboBoxText()
         self.backend_combo.append("faster-whisper", "faster-whisper (Standard)")
         self.backend_combo.append("openai-whisper", "openai-whisper (AMD GPU)")
         self.backend_combo.set_active_id(config.get("backend") or "faster-whisper")
-        backend_box.pack_start(self.backend_combo, False, False, 0)
-        whisper_box.pack_start(backend_box, False, False, 0)
+        self.backend_combo.set_hexpand(True)
+        whisper_grid.attach(self.backend_combo, 1, 0, 1, 1)
 
-        # Model Size
-        model_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        model_label = Gtk.Label(label="Model:")
-        model_label.set_xalign(0)
-        model_box.pack_start(model_label, True, True, 0)
-
+        model_label = Gtk.Label(label="Model:", xalign=0)
+        whisper_grid.attach(model_label, 0, 1, 1, 1)
         self.model_combo = Gtk.ComboBoxText()
         for model in ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]:
             self.model_combo.append(model, model)
         self.model_combo.set_active_id(config.get("model_size"))
-        model_box.pack_start(self.model_combo, False, False, 0)
-        whisper_box.pack_start(model_box, False, False, 0)
+        whisper_grid.attach(self.model_combo, 1, 1, 1, 1)
 
-        # Sprache
-        lang_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        lang_label = Gtk.Label(label="Sprache:")
-        lang_label.set_xalign(0)
-        lang_box.pack_start(lang_label, True, True, 0)
-
+        lang_label = Gtk.Label(label="Sprache:", xalign=0)
+        whisper_grid.attach(lang_label, 0, 2, 1, 1)
         self.lang_combo = Gtk.ComboBoxText()
         self.lang_combo.append("auto", "Automatisch")
         self.lang_combo.append("de", "Deutsch")
         self.lang_combo.append("en", "Englisch")
         current_lang = config.get("language") or "auto"
         self.lang_combo.set_active_id(current_lang)
-        lang_box.pack_start(self.lang_combo, False, False, 0)
-        whisper_box.pack_start(lang_box, False, False, 0)
+        whisper_grid.attach(self.lang_combo, 1, 2, 1, 1)
 
-        # Gerät (Device)
-        device_hw_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        device_hw_label = Gtk.Label(label="Geraet:")
-        device_hw_label.set_xalign(0)
-        device_hw_box.pack_start(device_hw_label, True, True, 0)
+        whisper_box.pack_start(whisper_grid, False, False, 0)
 
+        # Erweitert-Expander für Gerät/Rechentyp
+        expander = Gtk.Expander(label="Erweitert")
+        expander.set_margin_top(4)
+        adv_grid = Gtk.Grid(column_spacing=12, row_spacing=6)
+        adv_grid.set_margin_top(6)
+        adv_grid.set_margin_start(4)
+
+        device_hw_label = Gtk.Label(label="Gerät:", xalign=0)
+        adv_grid.attach(device_hw_label, 0, 0, 1, 1)
         self.device_hw_combo = Gtk.ComboBoxText()
         self.device_hw_combo.append("auto", "Auto (empfohlen)")
         self.device_hw_combo.append("cpu", "CPU")
         self.device_hw_combo.append("cuda", "CUDA (GPU)")
         self.device_hw_combo.set_active_id(config.get("device") or "auto")
-        device_hw_box.pack_start(self.device_hw_combo, False, False, 0)
-        whisper_box.pack_start(device_hw_box, False, False, 0)
+        self.device_hw_combo.set_hexpand(True)
+        adv_grid.attach(self.device_hw_combo, 1, 0, 1, 1)
 
-        # Rechentyp (Compute Type)
-        compute_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        compute_label = Gtk.Label(label="Rechentyp:")
-        compute_label.set_xalign(0)
-        compute_box.pack_start(compute_label, True, True, 0)
-
+        compute_label = Gtk.Label(label="Rechentyp:", xalign=0)
+        adv_grid.attach(compute_label, 0, 1, 1, 1)
         self.compute_combo = Gtk.ComboBoxText()
         self.compute_combo.append("auto", "Auto (empfohlen)")
         self.compute_combo.append("float16", "float16")
@@ -1196,21 +1188,22 @@ class SettingsDialog(Gtk.Dialog):
         self.compute_combo.append("float32", "float32")
         self.compute_combo.append("int8_float32", "int8_float32")
         self.compute_combo.set_active_id(config.get("compute_type") or "auto")
-        compute_box.pack_start(self.compute_combo, False, False, 0)
-        whisper_box.pack_start(compute_box, False, False, 0)
+        adv_grid.attach(self.compute_combo, 1, 1, 1, 1)
+
+        expander.add(adv_grid)
+        whisper_box.pack_start(expander, False, False, 0)
 
         whisper_frame.add(whisper_box)
         box.pack_start(whisper_frame, False, False, 0)
 
         # --- System ---
-        system_frame = Gtk.Frame(label=" System ")
-        system_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        system_box.set_margin_start(10)
-        system_box.set_margin_end(10)
-        system_box.set_margin_top(5)
-        system_box.set_margin_bottom(10)
+        system_frame = self._make_section("System")
+        system_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        system_box.set_margin_start(12)
+        system_box.set_margin_end(12)
+        system_box.set_margin_top(6)
+        system_box.set_margin_bottom(8)
 
-        # Autostart
         self.autostart_check = Gtk.CheckButton(label="Bei Systemstart automatisch starten")
         self.autostart_check.set_active(AUTOSTART_FILE.exists())
         system_box.pack_start(self.autostart_check, False, False, 0)
@@ -1218,11 +1211,11 @@ class SettingsDialog(Gtk.Dialog):
         system_frame.add(system_box)
         box.pack_start(system_frame, False, False, 0)
 
-        # Info-Label
+        # Info
         info_label = Gtk.Label()
-        info_label.set_markup("<small><i>Hinweis: Model- und Geraete-Aenderungen erfordern Neustart</i></small>")
+        info_label.set_markup("<small><i>Model- und Geräte-Änderungen erfordern Neustart</i></small>")
         info_label.set_xalign(0)
-        box.pack_start(info_label, False, False, 5)
+        box.pack_start(info_label, False, False, 2)
 
         # Buttons
         self.add_button("Abbrechen", Gtk.ResponseType.CANCEL)
@@ -1231,6 +1224,50 @@ class SettingsDialog(Gtk.Dialog):
 
         self.connect("response", self.on_response)
         self.show_all()
+
+    def _setup_css(self):
+        """Lädt CSS für moderneres Aussehen."""
+        css = b"""
+        .settings-section > border {
+            border-radius: 6px;
+            border-color: alpha(@borders, 0.6);
+        }
+        .settings-section > label {
+            font-weight: bold;
+            padding: 0 4px;
+        }
+        """
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+    @staticmethod
+    def _make_section(title):
+        """Erstellt ein styled Frame für eine Sektion."""
+        frame = Gtk.Frame(label=" {} ".format(title))
+        frame.get_style_context().add_class("settings-section")
+        return frame
+
+    @staticmethod
+    def _get_default_device_name():
+        """Ermittelt den Namen des Standard-Eingabegeräts."""
+        pa = pyaudio.PyAudio()
+        try:
+            info = pa.get_default_input_device_info()
+            name = info.get('name', '')
+            if isinstance(name, bytes):
+                name = name.decode('utf-8', errors='replace')
+            if len(name) > 35:
+                name = name[:32] + "..."
+            return name
+        except Exception:
+            return None
+        finally:
+            pa.terminate()
 
     def _refresh_trigger_listbox(self):
         """Aktualisiert die ListBox mit den aktuellen Triggern."""
@@ -1342,25 +1379,26 @@ class SettingsDialog(Gtk.Dialog):
 
     def on_response(self, dialog, response):
         if response == Gtk.ResponseType.OK:
-            # Trigger-Keys speichern
-            self.config.config["trigger_keys"] = list(self._trigger_list)
-            # Altes trigger_key entfernen falls vorhanden
-            self.config.config.pop("trigger_key", None)
+            # Alle Werte direkt in config schreiben (ohne einzelne saves)
+            c = self.config.config
+            c["trigger_keys"] = list(self._trigger_list)
+            c.pop("trigger_key", None)
+            c["hold_threshold"] = self.threshold_spin.get_value()
+            c["double_tap_enabled"] = self.double_tap_check.get_active()
+            c["model_size"] = self.model_combo.get_active_id()
 
-            self.config.set("hold_threshold", self.threshold_spin.get_value())
-            self.config.set("double_tap_enabled", self.double_tap_check.get_active())
-            self.config.set("model_size", self.model_combo.get_active_id())
-
-            # Aufnahmegerät
             device = self.device_combo.get_active_id()
-            self.config.set("input_device", None if device == "default" else device)
+            c["input_device"] = None if device == "default" else device
 
             lang = self.lang_combo.get_active_id()
-            self.config.set("language", None if lang == "auto" else lang)
+            c["language"] = None if lang == "auto" else lang
 
-            self.config.set("backend", self.backend_combo.get_active_id())
-            self.config.set("device", self.device_hw_combo.get_active_id())
-            self.config.set("compute_type", self.compute_combo.get_active_id())
+            c["backend"] = self.backend_combo.get_active_id()
+            c["device"] = self.device_hw_combo.get_active_id()
+            c["compute_type"] = self.compute_combo.get_active_id()
+
+            # Einmal speichern
+            self.config.save()
 
             # Autostart aktivieren/deaktivieren
             self._set_autostart(self.autostart_check.get_active())
@@ -1369,7 +1407,6 @@ class SettingsDialog(Gtk.Dialog):
             self.app._build_trigger_matchers()
             self.app._start_mouse_listener()
 
-            self.config.save()
             self.app._show_notification("Einstellungen", "Einstellungen gespeichert")
 
     def _set_autostart(self, enabled):
