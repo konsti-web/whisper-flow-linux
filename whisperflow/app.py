@@ -267,8 +267,10 @@ class WhisperFlowApp:
     # -- Live-Callbacks (Streaming-Worker-Thread) ------------------------------
 
     def _on_partial_text(self, text):
-        tail = self._session_finals[-1] if self._session_finals else ""
-        self.bridge.live_text.emit(tail[-120:], text)
+        # Akkumulierten Sitzungstext zeigen, nicht nur das letzte Segment -
+        # sonst "verschwinden" fertige Saetze aus dem Overlay
+        tail = " ".join(self._session_finals)
+        self.bridge.live_text.emit(tail[-160:], text)
 
     def _on_final_segment(self, text):
         first = not self._session_finals
@@ -276,7 +278,8 @@ class WhisperFlowApp:
         if self.config.get("live_inject") == "segment":
             # Folgesegmente mit fuehrendem Leerzeichen anschliessen
             self._inject(text if first else " " + text)
-        self.bridge.live_text.emit(text[-120:], "")
+        tail = " ".join(self._session_finals)
+        self.bridge.live_text.emit(tail[-160:], "")
 
     def _on_streaming_error(self, message, hint):
         self.bridge.notify.emit("Live-Transkription", "{}\n{}".format(message, hint), True)

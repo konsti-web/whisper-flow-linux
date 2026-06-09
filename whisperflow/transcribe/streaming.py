@@ -102,7 +102,9 @@ class StreamingTranscriber:
                 audio = self.recorder.read_new()
                 if audio.size:
                     for segment in self.segmenter.feed(audio):
-                        self.on_partial("")  # Vorschau leeren, Segment wird final
+                        # Vorschau bewusst stehen lassen, bis das finale
+                        # Ergebnis da ist - sonst "verschwindet" der Text
+                        # waehrend der Finalisierung kurz (Flackern)
                         self._transcribe_final(segment)
                         self._last_preview_len = 0
                 self._maybe_preview()
