@@ -1,5 +1,6 @@
 #!/bin/bash
-# Installation script für Whisper Flow Linux
+# Installation script fuer Whisper Flow (Linux)
+# macOS/Windows: siehe README (pip install .)
 
 set -e
 
@@ -10,31 +11,33 @@ AUTOSTART_FILE="$HOME/.config/autostart/${APP_NAME}.desktop"
 BIN_LINK="$HOME/.local/bin/${APP_NAME}"
 CONFIG_DIR="$HOME/.config/whisper-flow"
 
-echo "=== Whisper Flow Linux Installation ==="
+echo "=== Whisper Flow Installation (Linux) ==="
 echo ""
 echo "Installationsverzeichnis: $SCRIPT_DIR"
 echo ""
 
-# System-Abhängigkeiten
-echo "[1/6] Installiere System-Abhängigkeiten..."
-sudo apt update
-sudo apt install -y \
-    xclip \
-    xdotool \
-    portaudio19-dev \
-    python3-pip \
-    python3-venv \
-    libnotify-bin \
-    gir1.2-appindicator3-0.1 \
-    python3-gi \
-    python3-gi-cairo \
-    gir1.2-gtk-3.0
+# Paketmanager erkennen (distro-unabhaengig)
+echo "[1/6] Installiere System-Abhaengigkeiten..."
+if command -v apt &> /dev/null; then
+    sudo apt update
+    sudo apt install -y python3-pip python3-venv python3-dev xclip xdotool || true
+    # Wayland-Tools (optional, Paketnamen variieren)
+    sudo apt install -y wl-clipboard wtype 2>/dev/null || \
+        sudo apt install -y wl-clipboard 2>/dev/null || true
+elif command -v dnf &> /dev/null; then
+    sudo dnf install -y python3-pip python3-devel xclip xdotool wl-clipboard wtype || true
+elif command -v pacman &> /dev/null; then
+    sudo pacman -S --needed --noconfirm python-pip xclip xdotool wl-clipboard wtype || true
+else
+    echo "  Unbekannter Paketmanager - bitte manuell installieren:"
+    echo "  python3-venv, python3-dev, xclip, xdotool (X11) bzw. wl-clipboard, wtype (Wayland)"
+fi
 
 # Virtual Environment erstellen
 echo ""
 echo "[2/6] Erstelle virtuelle Umgebung..."
 cd "$SCRIPT_DIR"
-python3 -m venv venv --system-site-packages
+python3 -m venv venv
 source venv/bin/activate
 
 # Python-Pakete installieren
@@ -43,22 +46,34 @@ echo "[3/6] Installiere Python-Pakete..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Ausführbar machen
+# Wayland-Hotkeys (evdev) - optional, braucht python3-dev
+if [ -n "$WAYLAND_DISPLAY" ] || [ "$XDG_SESSION_TYPE" = "wayland" ]; then
+    echo ""
+    echo "  Wayland erkannt - installiere evdev fuer globale Hotkeys..."
+    pip install evdev || echo "  WARNUNG: evdev konnte nicht gebaut werden (python3-dev fehlt?)"
+    if ! groups | grep -q '\binput\b'; then
+        echo ""
+        echo "  WICHTIG: Fuer Hotkeys unter Wayland muss dein Benutzer in der Gruppe 'input' sein:"
+        echo "    sudo usermod -aG input \$USER"
+        echo "  Danach ab- und wieder anmelden."
+    fi
+fi
+
+# Ausfuehrbar machen
 echo ""
-echo "[4/6] Mache Skripte ausführbar..."
-chmod +x whisper_flow.py
-chmod +x run.sh
+echo "[4/6] Mache Skripte ausfuehrbar..."
+chmod +x whisper_flow.py run.sh
 
 # Desktop-Datei erstellen
 echo ""
-echo "[5/6] Erstelle Desktop-Verknüpfung..."
+echo "[5/6] Erstelle Desktop-Verknuepfung..."
 mkdir -p "$(dirname "$DESKTOP_FILE")"
 
 cat > "$DESKTOP_FILE" << EOF
 [Desktop Entry]
 Type=Application
 Name=Whisper Flow
-Comment=Sprache-zu-Text mit Tastendruck - Hold Ctrl to dictate
+Comment=Sprache-zu-Text mit Tastendruck
 Exec=${SCRIPT_DIR}/run.sh
 Icon=audio-input-microphone
 Terminal=false
@@ -67,7 +82,6 @@ Keywords=speech;voice;dictation;whisper;transcribe;
 StartupNotify=false
 EOF
 
-# Desktop-Datenbank aktualisieren
 if command -v update-desktop-database &> /dev/null; then
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 fi
@@ -88,24 +102,17 @@ exec "${SCRIPT_DIR}/run.sh" "\$@"
 EOF
 chmod +x "$BIN_LINK"
 
-# Konfigurationsverzeichnis erstellen
 mkdir -p "$CONFIG_DIR"
 
 echo ""
 echo "=== Installation abgeschlossen! ==="
 echo ""
-echo "Whisper Flow wurde installiert:"
+echo "  • Desktop-Verknuepfung: Im Anwendungsmenue unter 'Whisper Flow'"
+echo "  • Terminal-Befehl:      whisper-flow"
+echo "  • Autostart:            Aktiviert (in den Einstellungen aenderbar)"
 echo ""
-echo "  • Desktop-Verknüpfung: Im Anwendungsmenü unter 'Whisper Flow'"
-echo "  • Terminal-Befehl:     whisper-flow"
-echo "  • Autostart:           Aktiviert (kann in Einstellungen geändert werden)"
+echo "Starten mit:  whisper-flow"
 echo ""
-echo "Starten mit:"
-echo "  whisper-flow"
-echo ""
-echo "Oder über das Anwendungsmenü."
-echo ""
-echo "Hinweis: Falls 'whisper-flow' nicht gefunden wird, führe aus:"
-echo "  source ~/.profile"
-echo "  oder starte ein neues Terminal."
+echo "Hinweis GNOME: Fuer das Tray-Icon wird die Erweiterung"
+echo "'AppIndicator and KStatusNotifierItem Support' benoetigt."
 echo ""

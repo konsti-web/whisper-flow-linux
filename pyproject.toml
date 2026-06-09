@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whisperflow"
+version = "2.0.0"
+description = "Lokale Speech-to-Text-Diktier-App auf Whisper-Basis (Linux, macOS, Windows)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24.0",
+    "sounddevice>=0.4.6",
+    "pynput>=1.7.6",
+    "PySide6>=6.5.0",
+    "platformdirs>=3.0.0",
+    "psutil>=5.9.0",
+    "faster-whisper>=1.0.0",
+]
+
+[project.optional-dependencies]
+# whisper.cpp-Backend: Metal (macOS) und Vulkan (AMD/Intel-GPUs)
+whispercpp = ["pywhispercpp>=1.2.0"]
+# openai-whisper-Backend fuer AMD ROCm (PyTorch separat mit ROCm-Index installieren)
+rocm = ["openai-whisper>=20231117"]
+# Globale Hotkeys unter Wayland
+wayland = ["evdev>=1.6.0; sys_platform == 'linux'"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+whisperflow = "whisperflow.app:main"
+
+[tool.setuptools.packages.find]
+include = ["whisperflow*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

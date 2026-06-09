@@ -1,0 +1,52 @@
+# Flatpak-Manifest fuer Whisper Flow
+#
+# WICHTIGE EINSCHRAENKUNGEN (siehe README.md in diesem Ordner):
+# Globale Hotkeys und das automatische Einfuegen in fremde Fenster
+# kollidieren mit der Flatpak-Sandbox. Dieses Manifest oeffnet die
+# noetigen Loecher (--device=all fuer evdev-Hotkeys); AppImage oder die
+# native Installation bleiben die empfohlenen Wege.
+#
+# Bauen:
+#   1. python3 -m pip download -r requirements.txt -d packaging/flatpak/pip-cache
+#      (oder flatpak-pip-generator fuer offline-faehige Quellen verwenden)
+#   2. flatpak-builder --user --install build-flatpak \
+#        packaging/flatpak/io.github.konsti_web.WhisperFlow.yaml
+
+app-id: io.github.konsti_web.WhisperFlow
+runtime: org.kde.Platform
+runtime-version: '6.7'
+sdk: org.kde.Sdk
+command: whisperflow
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # Mikrofon
+  - --socket=pulseaudio
+  # Globale Hotkeys via evdev (liest /dev/input - Sandbox-Ausnahme!)
+  - --device=all
+  # Benachrichtigungen + Tray
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Modell-Download beim ersten Start
+  - --share=network
+  # Konfiguration
+  - --filesystem=xdg-config/whisper-flow:create
+
+modules:
+  - name: whisperflow
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network  # pip-Installation; fuer Flathub durch
+                           # flatpak-pip-generator-Quellen ersetzen
+    build-commands:
+      - pip3 install --prefix=/app --no-cache-dir .
+      - install -Dm644 assets/whisperflow.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.konsti_web.WhisperFlow.svg
+      - install -Dm644 packaging/flatpak/whisperflow.desktop
+        /app/share/applications/io.github.konsti_web.WhisperFlow.desktop
+    sources:
+      - type: dir
+        path: ../..
