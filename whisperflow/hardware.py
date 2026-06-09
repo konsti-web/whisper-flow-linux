@@ -265,8 +265,10 @@ def _cpu_fallback(hw: HardwareInfo, backends: Dict[str, bool]) -> Recommendation
         backend = "faster-whisper"
     elif backends.get("whisper-cpp"):
         backend = "whisper-cpp"
-    else:
+    elif backends.get("openai-whisper"):
         backend = "openai-whisper"
+    else:
+        backend = "faster-whisper"  # Standard-Abhaengigkeit, klare Fehlermeldung beim Laden
     return Recommendation(
         backend=backend, device="cpu", compute_type="int8", model_size=model,
         reason="Keine nutzbare GPU erkannt - CPU mit {} ({} Kerne, {:.0f} GB RAM)".format(

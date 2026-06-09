@@ -1,5 +1,13 @@
-faster-whisper>=1.0.0
-pynput>=1.7.6
-pyaudio>=0.2.14
+# Kern-Abhaengigkeiten (alle Plattformen)
 numpy>=1.24.0
-PyGObject>=3.42.0
+sounddevice>=0.4.6
+pynput>=1.7.6
+PySide6>=6.5.0
+platformdirs>=3.0.0
+psutil>=5.9.0
+faster-whisper>=1.0.0
+
+# Optional (bei Bedarf einkommentieren oder Extras nutzen):
+#   pip install .[whispercpp]  -> whisper.cpp: Metal (macOS) / Vulkan (AMD/Intel)
+#   pip install .[rocm]        -> openai-whisper fuer AMD ROCm
+#   pip install .[wayland]     -> evdev fuer globale Hotkeys unter Wayland

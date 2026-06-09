@@ -5,9 +5,6 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# WICHTIG: C.UTF-8 Locale - PyAV/FFmpeg hat Probleme mit de_DE
-export LANG=C.UTF-8
-export LC_ALL=C.UTF-8
 export PYTHONIOENCODING=utf-8
 
 if [ ! -d "venv" ]; then
@@ -17,7 +14,7 @@ fi
 
 source venv/bin/activate
 
-# GPU Bibliotheken Pfad setzen (Python-Version automatisch erkennen)
+# CUDA-Bibliotheken aus pip-Paketen finden (Python-Version automatisch erkennen)
 PYTHON_VERSION=$(python -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')")
 CUDA_LIBS="$SCRIPT_DIR/venv/lib/$PYTHON_VERSION/site-packages/nvidia"
 if [ -d "$CUDA_LIBS" ]; then
