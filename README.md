@@ -1,28 +1,50 @@
-# Whisper Flow Linux
+# Whisper Flow
 
-Speech-to-text for Linux. Hold a trigger key, speak, and the transcribed text is automatically inserted at the cursor position.
+Lokale Sprache-zu-Text-Diktierfunktion für **Linux, macOS und Windows**.
+Trigger-Taste gedrückt halten, sprechen — der Text erscheint an der
+Cursor-Position. Vollständig lokal, keine Cloud.
 
-Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) or [openai-whisper](https://github.com/openai/whisper) for fast, local transcription with GPU acceleration - no cloud, no data leaving your device.
+Basiert auf [faster-whisper](https://github.com/SYSTRAN/faster-whisper),
+[whisper.cpp](https://github.com/ggerganov/whisper.cpp) (via pywhispercpp)
+oder [openai-whisper](https://github.com/openai/whisper) — je nach Hardware
+wird automatisch das schnellste Backend gewählt.
 
 ## Features
 
-- **Hold-to-Record** - Hold the trigger key, speak, release to transcribe
-- **Double-Tap** - Tap trigger 2x quickly for hands-free dictation (optional)
-- **GPU-accelerated** - NVIDIA CUDA (faster-whisper) or AMD ROCm (openai-whisper)
-- **VU-Meter Overlay** - Visual audio level display during recording
-- **System Tray** - Runs in the background with a tray icon
-- **Fully configurable** - Trigger key, language, model, input device
-- **Autostart** - Optionally starts with your system
-- **Completely local** - No internet connection needed (after model download)
+- **Live-Transkription** — Text erscheint segmentweise *während* des
+  Sprechens (VAD-basiertes Chunking, Vorschau ≤ 2 s nach Sprechbeginn);
+  der klassische Batch-Modus bleibt als Option erhalten
+- **Automatische Hardware-Erkennung** — wählt beim Start Backend, Modell
+  und Quantisierung passend zu GPU/CPU/RAM:
 
-## Requirements
+  | Hardware | Backend | Gerät |
+  |---|---|---|
+  | NVIDIA-GPU | faster-whisper | CUDA |
+  | Apple Silicon | whisper.cpp | Metal |
+  | AMD-GPU mit ROCm | openai-whisper | ROCm |
+  | AMD/Intel/sonstige GPU | whisper.cpp | Vulkan |
+  | sonst | faster-whisper | CPU (int8) |
 
-- **Ubuntu/Debian** based Linux (tested on Ubuntu 24.04)
-- **NVIDIA GPU** with CUDA support, or **AMD GPU** with ROCm (via openai-whisper backend)
-- **Python 3.10+**
-- **X11** (Wayland is not supported due to xdotool/xclip dependency)
+  Alles manuell überschreibbar (Einstellungen → Whisper).
+- **Lernendes Wörterbuch** — korrigierst du im Verlaufsfenster dasselbe
+  Wort 3× gleich (Schwelle konfigurierbar), übernimmt die App die
+  Korrektur automatisch. Fachbegriffe/Namen lassen sich manuell pflegen.
+  Begriffe fließen als Hotwords/Initial-Prompt in die Erkennung ein,
+  gelernte Korrekturen werden zusätzlich deterministisch ersetzt.
+- **Klares Status-Feedback** — vier eindeutig unterscheidbare Zustände
+  (Farbe *und* Form) in Tray und Overlay: Bereit 🟢 / Aufnahme 🔴 /
+  Verarbeitung 🟠 / Fehler ⚠️. Fehler erscheinen immer mit
+  Lösungshinweis — kein stilles Scheitern.
+- **Zeitersparnis-Statistik** — diktierte Wörter und gesparte Minuten
+  gegenüber dem Tippen (Vergleichsbasis konfigurierbar, Default 40 WPM)
+- **Hold-to-Record & Doppel-Tipp**, frei belegbare Trigger (Tastatur und
+  Maus-Seitentasten), VU-Meter-Overlay mit Live-Textvorschau
+- **Vollständig lokal** — nach dem Modell-Download ist keine
+  Internetverbindung nötig
 
 ## Installation
+
+### Linux (distro-unabhängig, X11 & Wayland)
 
 ```bash
 git clone https://github.com/konsti-web/whisper-flow-linux.git
@@ -30,127 +52,132 @@ cd whisper-flow-linux
 ./install.sh
 ```
 
-The install script will:
-1. Install system dependencies (xclip, xdotool, portaudio, etc.)
-2. Create a Python virtual environment
-3. Install faster-whisper and dependencies
-4. Create a desktop shortcut and autostart entry
-5. Create the `whisper-flow` terminal command
+Das Skript erkennt apt/dnf/pacman, richtet venv, Desktop-Eintrag,
+Autostart und den Befehl `whisper-flow` ein.
 
-On first launch, the Whisper model will be downloaded (~1.5 GB for `large-v3-turbo`).
+**Wayland:** Globale Hotkeys laufen über `evdev` — dein Benutzer muss in
+der Gruppe `input` sein (`sudo usermod -aG input $USER`, dann neu
+anmelden). Fürs automatische Einfügen: `wl-clipboard` + `wtype`
+(wlroots) bzw. `ydotool` (GNOME); sonst landet der Text in der
+Zwischenablage und eine Benachrichtigung bittet um Strg+V.
 
-## Usage
+**GNOME:** Für das Tray-Icon die Erweiterung *AppIndicator and
+KStatusNotifierItem Support* aktivieren.
 
-### Starting
+### macOS
 
 ```bash
-# Via terminal
-whisper-flow
-
-# Or directly
-./run.sh
-
-# Or via the application menu
+git clone https://github.com/konsti-web/whisper-flow-linux.git
+cd whisper-flow-linux
+python3 -m venv venv && source venv/bin/activate
+pip install . pywhispercpp        # pywhispercpp = Metal-Backend
+whisperflow
 ```
 
-### Dictating
+Beim ersten Start fragt macOS nach zwei Berechtigungen
+(Systemeinstellungen → Datenschutz & Sicherheit):
+**Mikrofon**, **Eingabeüberwachung** (Hotkeys) und
+**Bedienungshilfen** (automatisches Einfügen).
 
-**Hold-to-Record (default):**
-1. Hold **AltGr**
-2. Speak
-3. Release - text is transcribed and inserted
+### Windows
 
-**Double-Tap (optional, enable in settings):**
-1. Tap **AltGr** twice quickly - recording starts
-2. Speak hands-free
-3. Tap **AltGr** twice again - recording stops
+```powershell
+git clone https://github.com/konsti-web/whisper-flow-linux.git
+cd whisper-flow-linux
+python -m venv venv; venv\Scripts\activate
+pip install .
+whisperflow
+```
 
-### Settings
+### Pakete
 
-Right-click the tray icon > **Einstellungen** (Settings):
+Tagged Releases bauen über GitHub Actions: **AppImage** (Linux),
+**.dmg** (macOS), **Inno-Setup-Installer** (Windows). Ein
+**Flatpak**-Manifest liegt unter `packaging/flatpak/` (mit dokumentierten
+Sandbox-Einschränkungen — AppImage ist unter Linux der empfohlene Weg).
 
-| Setting | Description |
+## Bedienung
+
+**Hold-to-Record (Standard):** AltGr gedrückt halten → sprechen →
+loslassen. Im Live-Modus erscheint der Text bereits während des
+Sprechens, Segment für Segment.
+
+**Doppel-Tipp (optional):** Trigger 2× schnell tippen startet die
+freihändige Aufnahme, erneuter Doppel-Tipp stoppt.
+
+**Tray-Menü:** Status, gesparte Zeit, Pause, Modus-Umschaltung
+(Live/Batch), Verlauf & Korrekturen, Statistik, Einstellungen.
+
+### Wörterbuch trainieren
+
+1. Tray → **Verlauf & Korrekturen** → Diktat doppelklicken
+2. Text korrigieren und speichern
+3. Nach 3 gleichen Korrekturen (konfigurierbar) lernt die App den
+   Begriff automatisch — sichtbar unter Einstellungen → Wörterbuch,
+   dort auch manuell editier- und löschbar
+
+## Konfiguration
+
+Datei: `~/.config/whisper-flow/config.json` (Linux),
+`~/Library/Application Support/whisper-flow/` (macOS),
+`%LOCALAPPDATA%\whisper-flow\` (Windows) — oder bequem über den
+Einstellungsdialog. Alle Auto-Werte (`backend`, `model_size`, `device`,
+`compute_type`) lassen sich fest überschreiben.
+
+| Schlüssel | Bedeutung (Auswahl) |
 |---|---|
-| **Aufnahmegerät** | Select input microphone (shows system default) |
-| **Trigger-Tasten** | Any keyboard or mouse button as trigger |
-| **Haltezeit** | Hold duration before recording starts (default: 0.3s) |
-| **Doppel-Tipp** | Hands-free dictation via double-tap |
-| **Backend** | faster-whisper (NVIDIA) or openai-whisper (AMD) |
-| **Model** | Whisper model size (tiny to large-v3-turbo) |
-| **Sprache** | German, English, or Automatic |
-| **Gerät / Rechentyp** | GPU/CPU selection and compute type (under "Erweitert") |
-| **Autostart** | Start on system boot |
+| `mode` | `live` (Streaming) oder `batch` |
+| `live_inject` | `segment` (sofort einfügen) oder `end` |
+| `vad_silence_ms` | Sprechpause, die ein Segment abschließt |
+| `dictionary_learn_threshold` | Korrekturen bis zur Übernahme (Default 3) |
+| `typing_wpm` | Vergleichs-Tippgeschwindigkeit für die Statistik |
+| `hotkey_backend` | `auto`, `pynput` oder `evdev` |
 
-### Changing Trigger Keys
+## Whisper-Modelle
 
-Any key or mouse button can be configured as a trigger in the settings:
-- **Keyboard**: AltGr, Ctrl, Alt, Shift, Space, etc.
-- **Mouse**: Side buttons (e.g. thumb button)
-- Multiple triggers can be active simultaneously
-
-## Whisper Models
-
-| Model | Size | Speed | Accuracy |
+| Modell | Größe | Tempo | Genauigkeit |
 |---|---|---|---|
-| `tiny` | ~75 MB | Very fast | Low |
-| `base` | ~150 MB | Fast | Medium |
-| `small` | ~500 MB | Medium | Good |
-| `medium` | ~1.5 GB | Slower | Very good |
-| `large-v3` | ~3 GB | Slow | Excellent |
-| `large-v3-turbo` | ~1.5 GB | Fast | Excellent |
+| `tiny` / `base` | 75–150 MB | sehr schnell | mäßig |
+| `small` | ~500 MB | schnell | gut |
+| `medium` | ~1,5 GB | langsamer | sehr gut |
+| `large-v3-turbo` | ~1,6 GB | schnell | exzellent |
 
-**Recommendation:** `large-v3-turbo` (default) - best balance of speed and accuracy.
+Im Auto-Modus wählt die App das größte Modell, das zur Hardware passt.
 
-## Configuration
-
-Config file: `~/.config/whisper-flow/config.json`
-
-```json
-{
-  "model_size": "large-v3-turbo",
-  "language": null,
-  "hold_threshold": 0.3,
-  "trigger_keys": ["key:alt_gr", "key:vk:65027"],
-  "autostart": true,
-  "input_device": null,
-  "double_tap_enabled": false,
-  "double_tap_interval": 0.4,
-  "backend": "faster-whisper",
-  "device": "auto",
-  "compute_type": "auto"
-}
-```
-
-## Uninstall
+## Entwicklung & Tests
 
 ```bash
-./uninstall.sh
+pip install numpy platformdirs psutil pytest
+python -m pytest tests/ -v
 ```
 
-Removes the desktop shortcut, autostart entry, and terminal command. Optionally deletes configuration, virtual environment, and model cache.
+Die Tests decken Hardware-Empfehlung, Wörterbuch-Lernlogik,
+Statistik-Berechnung, VAD-Segmentierung, Config-Migration und die
+Zustandsmaschine ab — ohne Qt- oder Whisper-Abhängigkeit.
 
-## Troubleshooting
+## Fehlerbehebung
 
-**"Model wird noch geladen..." (Model still loading)**
-The Whisper model is downloaded on first launch. Wait until the tray menu shows "Bereit" (Ready).
+**„Lade Modell…" bleibt stehen** — Erster Start lädt das Modell
+(~1,6 GB für large-v3-turbo). Tray-Menü zeigt „Bereit", sobald fertig.
 
-**Text is not inserted**
-- Make sure `xclip` and `xdotool` are installed: `sudo apt install xclip xdotool`
-- Only works on X11, not Wayland
+**Text wird nicht eingefügt** — Die Benachrichtigung nennt das fehlende
+Tool. X11: `xclip`/`xdotool`; Wayland: `wl-clipboard` + `wtype`/`ydotool`;
+macOS: Bedienungshilfen-Berechtigung erteilen.
 
-**No audio / wrong microphone**
-- Select the correct input device in settings
-- Check that the microphone is enabled in system settings
+**Hotkeys reagieren nicht (Wayland)** — `pip install evdev` und Benutzer
+zur Gruppe `input` hinzufügen (Hinweis erscheint auch in der App).
 
-**CUDA errors (NVIDIA)**
-- NVIDIA drivers installed? Check with `nvidia-smi`
-- CUDA is automatically installed via pip (no separate CUDA toolkit needed)
+**CUDA-Fehler (NVIDIA)** — Treiber prüfen (`nvidia-smi`). Die App fällt
+automatisch auf CPU zurück und meldet das als Benachrichtigung.
 
-**ROCm errors (AMD)**
-- ROCm installed? Check with `rocminfo`
-- Use the `openai-whisper` backend in settings
-- Install PyTorch with ROCm: `pip install torch --index-url https://download.pytorch.org/whl/rocm6.2`
+**ROCm (AMD)** — `pip install openai-whisper` und PyTorch mit
+ROCm-Index (`pip install torch --index-url
+https://download.pytorch.org/whl/rocm6.2`); die Erkennung wählt das
+Backend dann automatisch.
 
-## License
+**Vulkan (AMD/Intel)** — pywhispercpp mit Vulkan bauen:
+`GGML_VULKAN=1 pip install pywhispercpp --no-binary pywhispercpp`
+
+## Lizenz
 
 MIT

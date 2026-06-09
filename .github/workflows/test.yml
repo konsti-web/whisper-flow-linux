@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Bewusst nur die leichten Abhaengigkeiten: Die Kernlogik-Tests
+      # (Hardware-Empfehlung, Woerterbuch, Statistik, VAD, Config, State)
+      # brauchen weder Qt noch ein Whisper-Backend.
+      - run: pip install numpy platformdirs psutil pytest
+      - run: python -m pytest tests/ -v

@@ -1,0 +1,57 @@
+name: Build Packages
+
+# Baut Distributionspakete fuer alle drei Plattformen.
+# Laeuft bei Tags (v*) oder manuell.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  linux-appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y libfuse2 libegl1
+      - run: pip install -r requirements.txt pyinstaller
+      - run: bash packaging/appimage/build-appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WhisperFlow-AppImage
+          path: dist/*.AppImage
+
+  macos-dmg:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller
+      # whisper.cpp-Backend fuer Metal (best effort)
+      - run: pip install pywhispercpp || echo "pywhispercpp uebersprungen"
+      - run: bash packaging/macos/build-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WhisperFlow-dmg
+          path: dist/*.dmg
+
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller
+      - run: pyinstaller packaging/pyinstaller/whisperflow.spec --noconfirm
+      - run: choco install innosetup --no-progress -y
+      - run: iscc packaging\windows\installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WhisperFlow-Setup
+          path: dist/*Setup.exe

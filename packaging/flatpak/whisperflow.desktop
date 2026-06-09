@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Whisper Flow
+Comment=Lokale Sprache-zu-Text-Diktierfunktion (Whisper)
+Exec=whisperflow
+Icon=io.github.konsti_web.WhisperFlow
+Terminal=false
+Categories=Utility;Audio;Accessibility;
