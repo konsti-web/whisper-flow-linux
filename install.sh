@@ -21,16 +21,21 @@ echo "[1/6] Installiere System-Abhaengigkeiten..."
 if command -v apt &> /dev/null; then
     sudo apt update
     sudo apt install -y python3-pip python3-venv python3-dev xclip xdotool || true
+    # Qt-Laufzeitbibliotheken (PySide6/Qt 6.5+ braucht libxcb-cursor0 fuer X11)
+    sudo apt install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1 libgl1 libdbus-1-3 || true
     # Wayland-Tools (optional, Paketnamen variieren)
     sudo apt install -y wl-clipboard wtype 2>/dev/null || \
         sudo apt install -y wl-clipboard 2>/dev/null || true
 elif command -v dnf &> /dev/null; then
     sudo dnf install -y python3-pip python3-devel xclip xdotool wl-clipboard wtype || true
+    sudo dnf install -y xcb-util-cursor libxkbcommon-x11 mesa-libEGL || true
 elif command -v pacman &> /dev/null; then
     sudo pacman -S --needed --noconfirm python-pip xclip xdotool wl-clipboard wtype || true
+    sudo pacman -S --needed --noconfirm xcb-util-cursor libxkbcommon-x11 || true
 else
     echo "  Unbekannter Paketmanager - bitte manuell installieren:"
     echo "  python3-venv, python3-dev, xclip, xdotool (X11) bzw. wl-clipboard, wtype (Wayland)"
+    echo "  sowie die Qt-Bibliotheken xcb-util-cursor und libxkbcommon-x11"
 fi
 
 # Virtual Environment erstellen

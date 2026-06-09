@@ -157,6 +157,13 @@ Zustandsmaschine ab — ohne Qt- oder Whisper-Abhängigkeit.
 
 ## Fehlerbehebung
 
+**„Qt platform plugin xcb" / SIGABRT beim Start (Linux)** — Qt 6.5+
+braucht `libxcb-cursor0`: `sudo apt install libxcb-cursor0
+libxkbcommon-x11-0` (Fedora: `xcb-util-cursor libxkbcommon-x11`,
+Arch: `xcb-util-cursor libxkbcommon-x11`). Neuere Versionen von
+Whisper Flow erkennen das vor dem Start und zeigen genau diesen Hinweis;
+`install.sh` installiert die Bibliotheken automatisch mit.
+
 **„Lade Modell…" bleibt stehen** — Erster Start lädt das Modell
 (~1,6 GB für large-v3-turbo). Tray-Menü zeigt „Bereit", sobald fertig.
 

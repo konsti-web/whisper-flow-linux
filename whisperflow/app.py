@@ -16,6 +16,7 @@ Die fruehere Absturzursache - Transkription blockierte den
 Hotkey-Listener-Thread - ist damit behoben.
 """
 
+import os
 import signal
 import sys
 import threading
@@ -389,7 +390,52 @@ class WhisperFlowApp:
         self.qapp.quit()
 
 
+def _linux_qt_preflight():
+    """Prueft Qt-Systembibliotheken, bevor QApplication hart abbricht.
+
+    Qt >= 6.5 braucht fuer das xcb-Plugin (X11) libxcb-cursor0; fehlt die
+    Bibliothek, beendet sich Qt mit SIGABRT. Wir pruefen vorher und geben
+    einen verstaendlichen Hinweis mit Installationsbefehl aus.
+
+    Returns:
+        Liste fehlender Bibliotheken oder None, wenn alles passt bzw.
+        das xcb-Plugin gar nicht verwendet wird.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    platform_env = os.environ.get("QT_QPA_PLATFORM", "")
+    if platform_env and not platform_env.startswith("xcb"):
+        return None  # offscreen/wayland/... braucht kein xcb
+    if not platform_env:
+        if os.environ.get("XDG_SESSION_TYPE") == "wayland" or \
+                os.environ.get("WAYLAND_DISPLAY"):
+            return None  # Qt waehlt das wayland-Plugin
+        if not os.environ.get("DISPLAY"):
+            return None  # kein Display (SSH o. ae.) - Qt meldet das selbst
+
+    import ctypes
+    missing = []
+    for lib in ("libxcb-cursor.so.0", "libxkbcommon-x11.so.0"):
+        try:
+            ctypes.CDLL(lib)
+        except OSError:
+            missing.append(lib)
+    return missing or None
+
+
 def main():
+    missing = _linux_qt_preflight()
+    if missing:
+        safe_print("FEHLER: Qt-Systembibliotheken fehlen: {}".format(", ".join(missing)))
+        safe_print("")
+        safe_print("Loesung (je nach Distribution):")
+        safe_print("  Ubuntu/Debian: sudo apt install libxcb-cursor0 libxkbcommon-x11-0")
+        safe_print("  Fedora:        sudo dnf install xcb-util-cursor libxkbcommon-x11")
+        safe_print("  Arch:          sudo pacman -S xcb-util-cursor libxkbcommon-x11")
+        safe_print("")
+        safe_print("Danach Whisper Flow erneut starten.")
+        return 1
+
     QObject, QTimer, Signal, QApplication = _qt()
 
     QApplication.setQuitOnLastWindowClosed(False)
